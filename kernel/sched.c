@@ -1434,8 +1434,6 @@ static inline void cpuacct_update_stats(struct task_struct *tsk,
 		enum cpuacct_stat_index idx, cputime_t val) {}
 #endif
 
-#ifdef CONFIG_SCHED_NOTIFIERS
-
 #define fire_sched_notifiers(p, callback, args...) do {			\
 	struct sched_notifier *__sn;					\
 	struct hlist_node *__pos;					\
@@ -1465,12 +1463,6 @@ void sched_notifier_unregister(struct sched_notifier *notifier)
 	hlist_del(&notifier->link);
 }
 EXPORT_SYMBOL_GPL(sched_notifier_unregister);
-
-#else	/* !CONFIG_SCHED_NOTIFIERS */
-
-#define fire_sched_notifiers(p, callback, args...)	do { } while (0)
-
-#endif	/* CONFIG_SCHED_NOTIFIERS */
 
 static inline void inc_cpu_load(struct rq *rq, unsigned long load)
 {
@@ -2621,10 +2613,7 @@ static void __sched_fork(struct task_struct *p)
 	INIT_LIST_HEAD(&p->rt.run_list);
 	p->se.on_rq = 0;
 	INIT_LIST_HEAD(&p->se.group_node);
-
-#ifdef CONFIG_SCHED_NOTIFIERS
 	INIT_HLIST_HEAD(&p->sched_notifiers);
-#endif
 }
 
 /*
@@ -9648,9 +9637,7 @@ void __init sched_init(void)
 
 	set_load_weight(&init_task);
 
-#ifdef CONFIG_SCHED_NOTIFIERS
 	INIT_HLIST_HEAD(&init_task.sched_notifiers);
-#endif
 
 #ifdef CONFIG_SMP
 	open_softirq(SCHED_SOFTIRQ, run_rebalance_domains);
