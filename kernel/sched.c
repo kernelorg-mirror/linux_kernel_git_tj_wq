@@ -2076,6 +2076,7 @@ void set_task_cpu(struct task_struct *p, unsigned int new_cpu)
 struct migration_arg {
 	struct task_struct *task;
 	int dest_cpu;
+	bool force;
 };
 
 static int migration_cpu_stop(void *data);
@@ -3052,7 +3053,7 @@ void sched_exec(void)
 	 */
 	if (cpumask_test_cpu(dest_cpu, &p->cpus_allowed) &&
 	    likely(cpu_active(dest_cpu)) && migrate_task(p, dest_cpu)) {
-		struct migration_arg arg = { p, dest_cpu };
+		struct migration_arg arg = { p, dest_cpu, false };
 
 		task_rq_unlock(rq, &flags);
 		stop_one_cpu(cpu_of(rq), migration_cpu_stop, &arg);
@@ -5222,17 +5223,27 @@ static inline void sched_init_granularity(void)
  *    is done.
  */
 
-/*
- * Change a given task's CPU affinity. Migrate the thread to a
- * proper CPU and schedule it away if the CPU it's executing on
- * is removed from the allowed bitmask.
+/**
+ * __set_cpus_allowed - change a task's CPU affinity
+ * @p: task to change CPU affinity for
+ * @new_mask: new CPU affinity
+ * @force: override CPU active status and PF_THREAD_BOUND check
  *
- * NOTE: the caller must have a valid reference to the task, the
- * task must not exit() & deallocate itself prematurely. The
- * call is not atomic; no spinlocks may be held.
+ * Migrate the thread to a proper CPU and schedule it away if the CPU
+ * it's executing on is removed from the allowed bitmask.
+ *
+ * The caller must have a valid reference to the task, the task must
+ * not exit() & deallocate itself prematurely. The call is not atomic;
+ * no spinlocks may be held.
+ *
+ * If @force is %true, PF_THREAD_BOUND test is bypassed and CPU active
+ * state is ignored as long as the CPU is online.
  */
-int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
+int __set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask,
+		       bool force)
 {
+	const struct cpumask *cpu_cand_mask =
+		force ? cpu_online_mask : cpu_active_mask;
 	unsigned long flags;
 	struct rq *rq;
 	unsigned int dest_cpu;
@@ -5251,12 +5262,12 @@ again:
 		goto again;
 	}
 
-	if (!cpumask_intersects(new_mask, cpu_active_mask)) {
+	if (!cpumask_intersects(new_mask, cpu_cand_mask)) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (unlikely((p->flags & PF_THREAD_BOUND) && p != current &&
+	if (unlikely((p->flags & PF_THREAD_BOUND) && !force && p != current &&
 		     !cpumask_equal(&p->cpus_allowed, new_mask))) {
 		ret = -EINVAL;
 		goto out;
@@ -5273,9 +5284,9 @@ again:
 	if (cpumask_test_cpu(task_cpu(p), new_mask))
 		goto out;
 
-	dest_cpu = cpumask_any_and(cpu_active_mask, new_mask);
+	dest_cpu = cpumask_any_and(cpu_cand_mask, new_mask);
 	if (migrate_task(p, dest_cpu)) {
-		struct migration_arg arg = { p, dest_cpu };
+		struct migration_arg arg = { p, dest_cpu, force };
 		/* Need help from migration thread: drop lock and wait. */
 		task_rq_unlock(rq, &flags);
 		stop_one_cpu(cpu_of(rq), migration_cpu_stop, &arg);
@@ -5287,7 +5298,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(set_cpus_allowed_ptr);
+EXPORT_SYMBOL_GPL(__set_cpus_allowed);
 
 /*
  * Move (not current) task off this cpu, onto dest cpu. We're doing
@@ -5300,12 +5311,15 @@ EXPORT_SYMBOL_GPL(set_cpus_allowed_ptr);
  *
  * Returns non-zero if task was successfully migrated.
  */
-static int __migrate_task(struct task_struct *p, int src_cpu, int dest_cpu)
+static int __migrate_task(struct task_struct *p, int src_cpu, int dest_cpu,
+			  bool force)
 {
+	const struct cpumask *cpu_cand_mask =
+		force ? cpu_online_mask : cpu_active_mask;
 	struct rq *rq_dest, *rq_src;
 	int ret = 0;
 
-	if (unlikely(!cpu_active(dest_cpu)))
+	if (unlikely(!cpumask_test_cpu(dest_cpu, cpu_cand_mask)))
 		return ret;
 
 	rq_src = cpu_rq(src_cpu);
@@ -5350,7 +5364,8 @@ static int migration_cpu_stop(void *data)
 	 * be on another cpu but it doesn't matter.
 	 */
 	local_irq_disable();
-	__migrate_task(arg->task, raw_smp_processor_id(), arg->dest_cpu);
+	__migrate_task(arg->task, raw_smp_processor_id(), arg->dest_cpu,
+		       arg->force);
 	local_irq_enable();
 	return 0;
 }
@@ -5377,7 +5392,7 @@ void move_task_off_dead_cpu(int dead_cpu, struct task_struct *p)
 	 * in the racer should migrate the task anyway.
 	 */
 	if (needs_cpu)
-		__migrate_task(p, dead_cpu, dest_cpu);
+		__migrate_task(p, dead_cpu, dest_cpu, false);
 	local_irq_restore(flags);
 }
 
