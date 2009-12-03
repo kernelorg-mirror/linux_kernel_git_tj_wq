@@ -1167,8 +1167,6 @@ struct sched_rt_entity {
 #endif
 };
 
-#ifdef CONFIG_SCHED_NOTIFIERS
-
 struct sched_notifier;
 
 /**
@@ -1212,8 +1210,6 @@ static inline void sched_notifier_init(struct sched_notifier *notifier,
 	notifier->ops = ops;
 }
 
-#endif	/* CONFIG_SCHED_NOTIFIERS */
-
 struct rcu_node;
 
 struct task_struct {
@@ -1237,10 +1233,8 @@ struct task_struct {
 	struct sched_entity se;
 	struct sched_rt_entity rt;
 
-#ifdef CONFIG_SCHED_NOTIFIERS
 	/* list of struct sched_notifier: */
 	struct hlist_head sched_notifiers;
-#endif
 
 	/*
 	 * fpu_counter contains the number of consecutive context switches

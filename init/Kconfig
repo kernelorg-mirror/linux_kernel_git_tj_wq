@@ -1241,9 +1241,6 @@ config STOP_MACHINE
 
 source "block/Kconfig"
 
-config SCHED_NOTIFIERS
-	bool
-
 config PADATA
 	depends on SMP
 	bool

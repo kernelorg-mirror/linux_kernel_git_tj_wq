@@ -75,9 +75,7 @@ int kvm_io_bus_unregister_dev(struct kvm *kvm, enum kvm_bus bus_idx,
 
 struct kvm_vcpu {
 	struct kvm *kvm;
-#ifdef CONFIG_SCHED_NOTIFIERS
 	struct sched_notifier sched_notifier;
-#endif
 	int vcpu_id;
 	struct mutex mutex;
 	int   cpu;
