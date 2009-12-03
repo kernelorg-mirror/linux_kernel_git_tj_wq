@@ -1222,6 +1222,10 @@ struct sched_notifier;
 
 /**
  * sched_notifier_ops - notifiers called for scheduling events
+ * @wakeup: we're waking up
+ *    notifier: struct sched_notifier for the task being woken up
+ * @sleep: we're going to bed
+ *    notifier: struct sched_notifier for the task sleeping
  * @in: we're about to be rescheduled:
  *    notifier: struct sched_notifier for the task being scheduled
  *    cpu:  cpu we're scheduled on
@@ -1235,6 +1239,8 @@ struct sched_notifier;
  * and depended upon by its users.
  */
 struct sched_notifier_ops {
+	void (*wakeup)(struct sched_notifier *notifier);
+	void (*sleep)(struct sched_notifier *notifier);
 	void (*in)(struct sched_notifier *notifier, int cpu);
 	void (*out)(struct sched_notifier *notifier, struct task_struct *next);
 };
