@@ -2392,6 +2392,11 @@ static inline void ttwu_post_activation(struct task_struct *p, struct rq *rq,
 		rq->idle_stamp = 0;
 	}
 #endif
+	/*
+	 * Wake up is complete, fire wake up notifier.  This ordering
+	 * allows wake up notifiers to wake up another task bound to
+	 * this rq using try_to_wake_up_local().
+	 */
 	if (success)
 		fire_sched_notifiers(p, wakeup);
 }
@@ -2497,6 +2502,51 @@ out_running:
 out:
 	task_rq_unlock(rq, &flags);
 	put_cpu();
+
+	return success;
+}
+
+/**
+ * try_to_wake_up_local - try to wake up a local task with rq lock held
+ * @p: the thread to be awakened
+ * @state: the mask of task states that can be woken
+ * @wake_flags: wake modifier flags (WF_*)
+ *
+ * Put @p on the run-queue if it's not alredy there.  The caller must
+ * ensure that this_rq() is locked, @p is bound to this_rq() and @p is
+ * not the current task.  this_rq() stays locked over invocation.
+ *
+ * This function can be called from wakeup and sleep scheduler
+ * notifiers.  Be careful not to create deep recursion by chaining
+ * wakeup notifiers.
+ *
+ * Returns %true if @p was woken up, %false if it was already running
+ * or @state didn't match @p's state.
+ */
+bool try_to_wake_up_local(struct task_struct *p, unsigned int state,
+			  int wake_flags)
+{
+	struct rq *rq = task_rq(p);
+	bool success = false;
+
+	BUG_ON(rq != this_rq());
+	BUG_ON(p == current);
+	lockdep_assert_held(&rq->lock);
+
+	if (!(p->state & state))
+		return false;
+
+	if (!p->se.on_rq) {
+		if (likely(!task_running(rq, p))) {
+			schedstat_inc(rq, ttwu_count);
+			schedstat_inc(rq, ttwu_local);
+		}
+		ttwu_activate(p, rq, wake_flags & WF_SYNC, false, true,
+			      ENQUEUE_WAKEUP);
+		success = true;
+	}
+
+	ttwu_post_activation(p, rq, wake_flags, success);
 
 	return success;
 }
@@ -3594,6 +3644,12 @@ need_resched_nonpreemptible:
 		if (unlikely(signal_pending_state(prev->state, prev))) {
 			prev->state = TASK_RUNNING;
 		} else {
+			/*
+			 * Fire sleep notifier before changing any scheduler
+			 * state.  This ordering allows sleep notifiers to
+			 * wake up another task bound to this rq using
+			 * try_to_wake_up_local().
+			 */
 			fire_sched_notifiers(prev, sleep);
 			deactivate_task(rq, prev, DEQUEUE_SLEEP);
 		}
