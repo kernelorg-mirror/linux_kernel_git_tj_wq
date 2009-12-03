@@ -1249,7 +1249,7 @@ config STOP_MACHINE
 
 source "block/Kconfig"
 
-config PREEMPT_NOTIFIERS
+config SCHED_NOTIFIERS
 	bool
 
 source "kernel/Kconfig.locks"
