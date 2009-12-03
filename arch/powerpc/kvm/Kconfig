@@ -18,7 +18,7 @@ if VIRTUALIZATION
 
 config KVM
 	bool
-	select PREEMPT_NOTIFIERS
+	select SCHED_NOTIFIERS
 	select ANON_INODES
 
 config KVM_BOOK3S_64_HANDLER
