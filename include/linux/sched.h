@@ -1871,17 +1871,23 @@ static inline void rcu_copy_process(struct task_struct *p)
 #endif
 
 #ifdef CONFIG_SMP
-extern int set_cpus_allowed_ptr(struct task_struct *p,
-				const struct cpumask *new_mask);
+extern int __set_cpus_allowed(struct task_struct *p,
+			      const struct cpumask *new_mask, bool force);
 #else
-static inline int set_cpus_allowed_ptr(struct task_struct *p,
-				       const struct cpumask *new_mask)
+static inline int __set_cpus_allowed(struct task_struct *p,
+				     const struct cpumask *new_mask, bool force)
 {
 	if (!cpumask_test_cpu(0, new_mask))
 		return -EINVAL;
 	return 0;
 }
 #endif
+
+static inline int set_cpus_allowed_ptr(struct task_struct *p,
+				       const struct cpumask *new_mask)
+{
+	return __set_cpus_allowed(p, new_mask, false);
+}
 
 #ifndef CONFIG_CPUMASK_OFFSTACK
 static inline int set_cpus_allowed(struct task_struct *p, cpumask_t new_mask)
