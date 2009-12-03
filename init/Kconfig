@@ -1258,8 +1258,4 @@ config STOP_MACHINE
 	  Need stop_machine() primitive.
 
 source "block/Kconfig"
-
-config SCHED_NOTIFIERS
-	bool
-
 source "kernel/Kconfig.locks"
