@@ -2128,6 +2128,7 @@ struct migration_req {
 
 	struct task_struct *task;
 	int dest_cpu;
+	bool force;
 
 	struct completion done;
 };
@@ -2136,8 +2137,8 @@ struct migration_req {
  * The task's runqueue lock must be held.
  * Returns true if you have to wait for migration thread.
  */
-static int
-migrate_task(struct task_struct *p, int dest_cpu, struct migration_req *req)
+static int migrate_task(struct task_struct *p, int dest_cpu, bool force,
+			struct migration_req *req)
 {
 	struct rq *rq = task_rq(p);
 
@@ -2154,6 +2155,7 @@ migrate_task(struct task_struct *p, int dest_cpu, struct migration_req *req)
 	init_completion(&req->done);
 	req->task = p;
 	req->dest_cpu = dest_cpu;
+	req->force = force;
 	list_add(&req->list, &rq->migration_queue);
 
 	return 1;
@@ -3112,7 +3114,7 @@ static void sched_migrate_task(struct task_struct *p, int dest_cpu)
 		goto out;
 
 	/* force the process onto the specified CPU */
-	if (migrate_task(p, dest_cpu, &req)) {
+	if (migrate_task(p, dest_cpu, false, &req)) {
 		/* Need to wait for migration thread (might exit: take ref). */
 		struct task_struct *mt = rq->migration_thread;
 
@@ -7078,29 +7080,39 @@ static inline void sched_init_granularity(void)
  * 7) we wake up and the migration is done.
  */
 
-/*
- * Change a given task's CPU affinity. Migrate the thread to a
- * proper CPU and schedule it away if the CPU it's executing on
- * is removed from the allowed bitmask.
+/**
+ * __set_cpus_allowed - change a task's CPU affinity
+ * @p: task to change CPU affinity for
+ * @new_mask: new CPU affinity
+ * @force: override CPU active status and PF_THREAD_BOUND check
  *
- * NOTE: the caller must have a valid reference to the task, the
- * task must not exit() & deallocate itself prematurely. The
- * call is not atomic; no spinlocks may be held.
+ * Migrate the thread to a proper CPU and schedule it away if the CPU
+ * it's executing on is removed from the allowed bitmask.
+ *
+ * The caller must have a valid reference to the task, the task must
+ * not exit() & deallocate itself prematurely. The call is not atomic;
+ * no spinlocks may be held.
+ *
+ * If @force is %true, PF_THREAD_BOUND test is bypassed and CPU active
+ * state is ignored as long as the CPU is online.
  */
-int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
+int __set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask,
+		       bool force)
 {
+	const struct cpumask *cpu_cand_mask =
+		force ? cpu_online_mask : cpu_active_mask;
 	struct migration_req req;
 	unsigned long flags;
 	struct rq *rq;
 	int ret = 0;
 
 	rq = task_rq_lock(p, &flags);
-	if (!cpumask_intersects(new_mask, cpu_active_mask)) {
+	if (!cpumask_intersects(new_mask, cpu_cand_mask)) {
 		ret = -EINVAL;
 		goto out;
 	}
 
-	if (unlikely((p->flags & PF_THREAD_BOUND) && p != current &&
+	if (unlikely((p->flags & PF_THREAD_BOUND) && !force && p != current &&
 		     !cpumask_equal(&p->cpus_allowed, new_mask))) {
 		ret = -EINVAL;
 		goto out;
@@ -7117,7 +7129,8 @@ int set_cpus_allowed_ptr(struct task_struct *p, const struct cpumask *new_mask)
 	if (cpumask_test_cpu(task_cpu(p), new_mask))
 		goto out;
 
-	if (migrate_task(p, cpumask_any_and(cpu_active_mask, new_mask), &req)) {
+	if (migrate_task(p, cpumask_any_and(cpu_cand_mask, new_mask), force,
+			 &req)) {
 		/* Need help from migration thread: drop lock and wait. */
 		struct task_struct *mt = rq->migration_thread;
 
@@ -7134,7 +7147,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(set_cpus_allowed_ptr);
+EXPORT_SYMBOL_GPL(__set_cpus_allowed);
 
 /*
  * Move (not current) task off this cpu, onto dest cpu. We're doing
@@ -7147,12 +7160,15 @@ EXPORT_SYMBOL_GPL(set_cpus_allowed_ptr);
  *
  * Returns non-zero if task was successfully migrated.
  */
-static int __migrate_task(struct task_struct *p, int src_cpu, int dest_cpu)
+static int __migrate_task(struct task_struct *p, int src_cpu, int dest_cpu,
+			  bool force)
 {
+	const struct cpumask *cpu_cand_mask =
+		force ? cpu_online_mask : cpu_active_mask;
 	struct rq *rq_dest, *rq_src;
 	int ret = 0, on_rq;
 
-	if (unlikely(!cpu_active(dest_cpu)))
+	if (unlikely(!cpumask_test_cpu(dest_cpu, cpu_cand_mask)))
 		return ret;
 
 	rq_src = cpu_rq(src_cpu);
@@ -7231,7 +7247,8 @@ static int migration_thread(void *data)
 
 		if (req->task != NULL) {
 			raw_spin_unlock(&rq->lock);
-			__migrate_task(req->task, cpu, req->dest_cpu);
+			__migrate_task(req->task, cpu, req->dest_cpu,
+				       req->force);
 		} else if (likely(cpu == (badcpu = smp_processor_id()))) {
 			req->dest_cpu = RCU_MIGRATION_GOT_QS;
 			raw_spin_unlock(&rq->lock);
@@ -7256,7 +7273,7 @@ static int __migrate_task_irq(struct task_struct *p, int src_cpu, int dest_cpu)
 	int ret;
 
 	local_irq_disable();
-	ret = __migrate_task(p, src_cpu, dest_cpu);
+	ret = __migrate_task(p, src_cpu, dest_cpu, false);
 	local_irq_enable();
 	return ret;
 }
