@@ -1218,6 +1218,53 @@ struct sched_rt_entity {
 #endif
 };
 
+#ifdef CONFIG_SCHED_NOTIFIERS
+
+struct sched_notifier;
+
+/**
+ * sched_notifier_ops - notifiers called for scheduling events
+ * @in: we're about to be rescheduled:
+ *    notifier: struct sched_notifier for the task being scheduled
+ *    cpu:  cpu we're scheduled on
+ * @out: we've just been preempted
+ *    notifier: struct sched_notifier for the task being preempted
+ *    next: the task that's kicking us out
+ *
+ * Please note that in and out are called under different contexts.
+ * out is called with rq lock held and irq disabled while in is called
+ * without rq lock and irq enabled.  This difference is intentional
+ * and depended upon by its users.
+ */
+struct sched_notifier_ops {
+	void (*in)(struct sched_notifier *notifier, int cpu);
+	void (*out)(struct sched_notifier *notifier, struct task_struct *next);
+};
+
+/**
+ * sched_notifier - key for installing scheduler notifiers
+ * @link: internal use
+ * @ops: defines the notifier functions to be called
+ *
+ * Usually used in conjunction with container_of().
+ */
+struct sched_notifier {
+	struct hlist_node link;
+	struct sched_notifier_ops *ops;
+};
+
+void sched_notifier_register(struct sched_notifier *notifier);
+void sched_notifier_unregister(struct sched_notifier *notifier);
+
+static inline void sched_notifier_init(struct sched_notifier *notifier,
+				       struct sched_notifier_ops *ops)
+{
+	INIT_HLIST_NODE(&notifier->link);
+	notifier->ops = ops;
+}
+
+#endif	/* CONFIG_SCHED_NOTIFIERS */
+
 struct rcu_node;
 
 struct task_struct {
@@ -1241,9 +1288,9 @@ struct task_struct {
 	struct sched_entity se;
 	struct sched_rt_entity rt;
 
-#ifdef CONFIG_PREEMPT_NOTIFIERS
-	/* list of struct preempt_notifier: */
-	struct hlist_head preempt_notifiers;
+#ifdef CONFIG_SCHED_NOTIFIERS
+	/* list of struct sched_notifier: */
+	struct hlist_head sched_notifiers;
 #endif
 
 	/*

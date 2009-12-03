@@ -77,7 +77,7 @@ static atomic_t hardware_enable_failed;
 struct kmem_cache *kvm_vcpu_cache;
 EXPORT_SYMBOL_GPL(kvm_vcpu_cache);
 
-static __read_mostly struct preempt_ops kvm_preempt_ops;
+static __read_mostly struct sched_notifier_ops kvm_sched_notifier_ops;
 
 struct dentry *kvm_debugfs_dir;
 
@@ -109,7 +109,7 @@ void vcpu_load(struct kvm_vcpu *vcpu)
 
 	mutex_lock(&vcpu->mutex);
 	cpu = get_cpu();
-	preempt_notifier_register(&vcpu->preempt_notifier);
+	sched_notifier_register(&vcpu->sched_notifier);
 	kvm_arch_vcpu_load(vcpu, cpu);
 	put_cpu();
 }
@@ -118,7 +118,7 @@ void vcpu_put(struct kvm_vcpu *vcpu)
 {
 	preempt_disable();
 	kvm_arch_vcpu_put(vcpu);
-	preempt_notifier_unregister(&vcpu->preempt_notifier);
+	sched_notifier_unregister(&vcpu->sched_notifier);
 	preempt_enable();
 	mutex_unlock(&vcpu->mutex);
 }
@@ -1195,7 +1195,7 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	if (IS_ERR(vcpu))
 		return PTR_ERR(vcpu);
 
-	preempt_notifier_init(&vcpu->preempt_notifier, &kvm_preempt_ops);
+	sched_notifier_init(&vcpu->sched_notifier, &kvm_sched_notifier_ops);
 
 	r = kvm_arch_vcpu_setup(vcpu);
 	if (r)
@@ -2029,23 +2029,21 @@ static struct sys_device kvm_sysdev = {
 struct page *bad_page;
 pfn_t bad_pfn;
 
-static inline
-struct kvm_vcpu *preempt_notifier_to_vcpu(struct preempt_notifier *pn)
+static inline struct kvm_vcpu *sched_notifier_to_vcpu(struct sched_notifier *sn)
 {
-	return container_of(pn, struct kvm_vcpu, preempt_notifier);
+	return container_of(sn, struct kvm_vcpu, sched_notifier);
 }
 
-static void kvm_sched_in(struct preempt_notifier *pn, int cpu)
+static void kvm_sched_in(struct sched_notifier *sn, int cpu)
 {
-	struct kvm_vcpu *vcpu = preempt_notifier_to_vcpu(pn);
+	struct kvm_vcpu *vcpu = sched_notifier_to_vcpu(sn);
 
 	kvm_arch_vcpu_load(vcpu, cpu);
 }
 
-static void kvm_sched_out(struct preempt_notifier *pn,
-			  struct task_struct *next)
+static void kvm_sched_out(struct sched_notifier *sn, struct task_struct *next)
 {
-	struct kvm_vcpu *vcpu = preempt_notifier_to_vcpu(pn);
+	struct kvm_vcpu *vcpu = sched_notifier_to_vcpu(sn);
 
 	kvm_arch_vcpu_put(vcpu);
 }
@@ -2118,8 +2116,8 @@ int kvm_init(void *opaque, unsigned int vcpu_size,
 		goto out_free;
 	}
 
-	kvm_preempt_ops.sched_in = kvm_sched_in;
-	kvm_preempt_ops.sched_out = kvm_sched_out;
+	kvm_sched_notifier_ops.in = kvm_sched_in;
+	kvm_sched_notifier_ops.out = kvm_sched_out;
 
 	kvm_init_debug();
 
