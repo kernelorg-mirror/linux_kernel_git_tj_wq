@@ -1407,7 +1407,8 @@ static inline void cpuacct_update_stats(struct task_struct *tsk,
 	struct hlist_node *__pos;					\
 									\
 	hlist_for_each_entry(__sn, __pos, &(p)->sched_notifiers, link)	\
-		__sn->ops->callback(__sn , ##args);			\
+		if (__sn->ops->callback)				\
+			__sn->ops->callback(__sn , ##args);		\
 } while (0)
 
 /**
@@ -2391,6 +2392,8 @@ static inline void ttwu_post_activation(struct task_struct *p, struct rq *rq,
 		rq->idle_stamp = 0;
 	}
 #endif
+	if (success)
+		fire_sched_notifiers(p, wakeup);
 }
 
 /**
@@ -3588,10 +3591,12 @@ need_resched_nonpreemptible:
 	clear_tsk_need_resched(prev);
 
 	if (prev->state && !(preempt_count() & PREEMPT_ACTIVE)) {
-		if (unlikely(signal_pending_state(prev->state, prev)))
+		if (unlikely(signal_pending_state(prev->state, prev))) {
 			prev->state = TASK_RUNNING;
-		else
+		} else {
+			fire_sched_notifiers(prev, sleep);
 			deactivate_task(rq, prev, DEQUEUE_SLEEP);
+		}
 		switch_count = &prev->nvcsw;
 	}
 
