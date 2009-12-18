@@ -29,7 +29,22 @@ enum {
 	WORK_STRUCT_PENDING	= 1 << WORK_STRUCT_PENDING_BIT,
 	WORK_STRUCT_STATIC	= 1 << WORK_STRUCT_STATIC_BIT,
 
-	WORK_STRUCT_FLAG_BITS	= 2,
+	WORK_STRUCT_COLOR_SHIFT	= 3,	/* color for workqueue flushing */
+	WORK_STRUCT_COLOR_BITS	= 4,
+
+	/*
+	 * The last color is no color used for works which don't
+	 * participate in workqueue flushing.
+	 */
+	WORK_NR_COLORS		= (1 << WORK_STRUCT_COLOR_BITS) - 1,
+	WORK_NO_COLOR		= WORK_NR_COLORS,
+
+	/*
+	 * Reserve 7 bits off of cwq pointer.  This makes cwqs aligned
+	 * to 128 bytes which isn't too excessive while allowing 15
+	 * workqueue flush colors.
+	 */
+	WORK_STRUCT_FLAG_BITS	= 7,
 
 	WORK_STRUCT_FLAG_MASK	= (1UL << WORK_STRUCT_FLAG_BITS) - 1,
 	WORK_STRUCT_WQ_DATA_MASK = ~WORK_STRUCT_FLAG_MASK,
