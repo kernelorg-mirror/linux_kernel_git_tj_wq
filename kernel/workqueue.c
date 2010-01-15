@@ -1960,6 +1960,37 @@ out_unlock:
 EXPORT_SYMBOL_GPL(flush_workqueue);
 
 /**
+ * work_busy - test whether a work is currently pending or running
+ * @work: the work to be tested
+ *
+ * Test whether @work is currently pending or running.  There is no
+ * synchronization around this function and the test result is
+ * unreliable and only useful as advisory hints or for debugging.  The
+ * caller is responsible for ensuring the workqueue @work was last
+ * queued on stays valid until this function returns.
+ *
+ * RETURNS:
+ * %true if @work is currently running, %false otherwise.
+ */
+bool work_busy(struct work_struct *work)
+{
+	struct cpu_workqueue_struct *cwq = get_wq_data(work);
+	struct global_cwq *gcwq;
+	unsigned long flags;
+	bool ret;
+
+	if (!cwq)
+		return false;
+	gcwq = cwq->gcwq;
+
+	spin_lock_irqsave(&gcwq->lock, flags);
+	ret = work_pending(work) || find_worker_executing_work(gcwq, work);
+	spin_unlock_irqrestore(&gcwq->lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(work_busy);
+
+/**
  * flush_work - block until a work_struct's callback has terminated
  * @work: the work which is to be flushed
  *
