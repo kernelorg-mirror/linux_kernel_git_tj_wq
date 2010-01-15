@@ -749,6 +749,8 @@ struct ata_port {
 
 	void			*port_task_data;
 	struct delayed_work	port_task;
+
+	struct mutex		scsi_scan_mutex;
 	struct delayed_work	hotplug_task;
 	struct work_struct	scsi_rescan_task;
 

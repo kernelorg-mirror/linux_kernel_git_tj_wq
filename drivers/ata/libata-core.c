@@ -97,8 +97,6 @@ static unsigned long ata_dev_blacklisted(const struct ata_device *dev);
 unsigned int ata_print_id = 1;
 static struct workqueue_struct *ata_wq;
 
-struct workqueue_struct *ata_aux_wq;
-
 struct ata_force_param {
 	const char	*name;
 	unsigned int	cbl;
@@ -5681,6 +5679,7 @@ struct ata_port *ata_port_alloc(struct ata_host *host)
 #else
 	INIT_DELAYED_WORK(&ap->port_task, NULL);
 #endif
+	mutex_init(&ap->scsi_scan_mutex);
 	INIT_DELAYED_WORK(&ap->hotplug_task, ata_scsi_hotplug);
 	INIT_WORK(&ap->scsi_rescan_task, ata_scsi_dev_rescan);
 	INIT_LIST_HEAD(&ap->eh_done_q);
@@ -6616,26 +6615,13 @@ static int __init ata_init(void)
 {
 	ata_parse_force_param();
 
-	/*
-	 * FIXME: In UP case, there is only one workqueue thread and if you
-	 * have more than one PIO device, latency is bloody awful, with
-	 * occasional multi-second "hiccups" as one PIO device waits for
-	 * another.  It's an ugly wart that users DO occasionally complain
-	 * about; luckily most users have at most one PIO polled device.
-	 */
-	ata_wq = create_workqueue("ata");
+	ata_wq = __create_workqueue("ata", WQ_RESCUER, WQ_MAX_ACTIVE);
 	if (!ata_wq)
 		goto free_force_tbl;
-
-	ata_aux_wq = create_singlethread_workqueue("ata_aux");
-	if (!ata_aux_wq)
-		goto free_wq;
 
 	printk(KERN_DEBUG "libata version " DRV_VERSION " loaded.\n");
 	return 0;
 
-free_wq:
-	destroy_workqueue(ata_wq);
 free_force_tbl:
 	kfree(ata_force_tbl);
 	return -ENOMEM;
@@ -6645,7 +6631,6 @@ static void __exit ata_exit(void)
 {
 	kfree(ata_force_tbl);
 	destroy_workqueue(ata_wq);
-	destroy_workqueue(ata_aux_wq);
 }
 
 subsys_initcall(ata_init);
