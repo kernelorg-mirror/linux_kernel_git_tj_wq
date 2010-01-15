@@ -2142,7 +2142,7 @@ static int sd_format_disk_name(char *prefix, int index, char *buf, int buflen)
 /*
  * The asynchronous part of sd_probe
  */
-static void sd_probe_async(void *data, async_cookie_t cookie)
+static void sd_probe_async(void *data)
 {
 	struct scsi_disk *sdkp = data;
 	struct scsi_device *sdp;
@@ -2277,8 +2277,8 @@ static int sd_probe(struct device *dev)
 
 	get_device(&sdp->sdev_gendev);
 
-	get_device(&sdkp->dev);	/* prevent release before async_schedule */
-	async_schedule(sd_probe_async, sdkp);
+	get_device(&sdkp->dev);	/* prevent release before async_call */
+	async_call(sd_probe_async, sdkp);
 
 	return 0;
 
@@ -2309,7 +2309,7 @@ static int sd_remove(struct device *dev)
 {
 	struct scsi_disk *sdkp;
 
-	async_synchronize_full();
+	async_barrier();
 	sdkp = dev_get_drvdata(dev);
 	blk_queue_prep_rq(sdkp->device->request_queue, scsi_prep_fn);
 	device_del(&sdkp->dev);

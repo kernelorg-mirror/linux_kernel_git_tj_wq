@@ -911,7 +911,7 @@ static struct acpi_driver acpi_battery_driver = {
 		},
 };
 
-static void __init acpi_battery_init_async(void *unused, async_cookie_t cookie)
+static void __init acpi_battery_init_async(void *unused)
 {
 	if (acpi_disabled)
 		return;
@@ -931,7 +931,7 @@ static void __init acpi_battery_init_async(void *unused, async_cookie_t cookie)
 
 static int __init acpi_battery_init(void)
 {
-	async_schedule(acpi_battery_init_async, NULL);
+	async_call(acpi_battery_init_async, NULL);
 	return 0;
 }
 

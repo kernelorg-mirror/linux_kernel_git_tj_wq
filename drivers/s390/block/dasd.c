@@ -2276,7 +2276,7 @@ dasd_exit(void)
  * SECTION: common functions for ccw_driver use
  */
 
-static void dasd_generic_auto_online(void *data, async_cookie_t cookie)
+static void dasd_generic_auto_online(void *data)
 {
 	struct ccw_device *cdev = data;
 	int ret;
@@ -2317,7 +2317,7 @@ int dasd_generic_probe(struct ccw_device *cdev,
 	 */
 	if ((dasd_get_feature(cdev, DASD_FEATURE_INITIAL_ONLINE) > 0 ) ||
 	    (dasd_autodetect && dasd_busid_known(dev_name(&cdev->dev)) != 0))
-		async_schedule(dasd_generic_auto_online, cdev);
+		async_call(dasd_generic_auto_online, cdev);
 	return 0;
 }
 

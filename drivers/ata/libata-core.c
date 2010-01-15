@@ -6068,20 +6068,10 @@ void ata_host_init(struct ata_host *host, struct device *dev,
 }
 
 
-static void async_port_probe(void *data, async_cookie_t cookie)
+static void async_port_probe(void *data)
 {
 	int rc;
 	struct ata_port *ap = data;
-
-	/*
-	 * If we're not allowed to scan this host in parallel,
-	 * we need to wait until all previous scans have completed
-	 * before going further.
-	 * Jeff Garzik says this is only within a controller, so we
-	 * don't need to wait for port 0, only for later ports.
-	 */
-	if (!(ap->host->flags & ATA_HOST_PARALLEL_SCAN) && ap->port_no != 0)
-		async_synchronize_cookie(cookie);
 
 	/* probe */
 	if (ap->ops->error_handler) {
@@ -6119,13 +6109,17 @@ static void async_port_probe(void *data, async_cookie_t cookie)
 			 */
 		}
 	}
-
-	/* in order to keep device order, we need to synchronize at this point */
-	async_synchronize_cookie(cookie);
-
-	ata_scsi_scan_host(ap, 1);
-
 }
+
+static void async_port_probe_finish(void *data)
+{
+	struct ata_host *host = data;
+	int i;
+
+	for (i = 0; i < host->n_ports; i++)
+		ata_scsi_scan_host(host->ports[i], 1);
+}
+
 /**
  *	ata_host_register - register initialized ATA host
  *	@host: ATA host to register
@@ -6204,8 +6198,13 @@ int ata_host_register(struct ata_host *host, struct scsi_host_template *sht)
 	/* perform each probe asynchronously */
 	for (i = 0; i < host->n_ports; i++) {
 		struct ata_port *ap = host->ports[i];
-		async_schedule(async_port_probe, ap);
+
+		if (host->flags & ATA_HOST_PARALLEL_SCAN)
+			async_call(async_port_probe, ap);
+		else
+			async_call_ordered(async_port_probe, ap);
 	}
+	async_call_ordered(async_port_probe_finish, host);
 
 	return 0;
 }

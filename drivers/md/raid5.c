@@ -1206,7 +1206,7 @@ static void __raid_run_ops(struct stripe_head *sh, unsigned long ops_request)
 }
 
 #ifdef CONFIG_MULTICORE_RAID456
-static void async_run_ops(void *param, async_cookie_t cookie)
+static void async_run_ops(void *param)
 {
 	struct stripe_head *sh = param;
 	unsigned long ops_request = sh->ops.request;
@@ -1229,7 +1229,7 @@ static void raid_run_ops(struct stripe_head *sh, unsigned long ops_request)
 	sh->ops.request = ops_request;
 
 	atomic_inc(&sh->count);
-	async_schedule(async_run_ops, sh);
+	async_call(async_run_ops, sh);
 }
 #else
 #define raid_run_ops __raid_run_ops
