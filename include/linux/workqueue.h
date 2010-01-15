@@ -25,9 +25,11 @@ typedef void (*work_func_t)(struct work_struct *work);
 enum {
 	WORK_STRUCT_PENDING_BIT	= 0,	/* work item is pending execution */
 	WORK_STRUCT_STATIC_BIT	= 1,	/* static initializer (debugobjects) */
+	WORK_STRUCT_LINKED_BIT	= 2,	/* next work is linked to this one */
 
 	WORK_STRUCT_PENDING	= 1 << WORK_STRUCT_PENDING_BIT,
 	WORK_STRUCT_STATIC	= 1 << WORK_STRUCT_STATIC_BIT,
+	WORK_STRUCT_LINKED	= 1 << WORK_STRUCT_LINKED_BIT,
 
 	WORK_STRUCT_COLOR_SHIFT	= 3,	/* color for workqueue flushing */
 	WORK_STRUCT_COLOR_BITS	= 4,
