@@ -20,7 +20,6 @@
 
 #include <linux/fscache.h>
 #include <linux/sched.h>
-#include <linux/slow-work.h>
 #include <linux/workqueue.h>
 
 #define NR_MAXCACHES BITS_PER_LONG
@@ -102,15 +101,8 @@ struct fscache_operation {
 	/* operation releaser */
 	fscache_operation_release_t release;
 
-#ifdef CONFIG_SLOW_WORK_PROC
-	const char *name;		/* operation name */
-	const char *state;		/* operation state */
-#define fscache_set_op_name(OP, N)	do { (OP)->name  = (N); } while(0)
-#define fscache_set_op_state(OP, S)	do { (OP)->state = (S); } while(0)
-#else
 #define fscache_set_op_name(OP, N)	do { } while(0)
 #define fscache_set_op_state(OP, S)	do { } while(0)
-#endif
 };
 
 extern atomic_t fscache_op_debug_id;

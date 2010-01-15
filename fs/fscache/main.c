@@ -48,13 +48,8 @@ struct workqueue_struct *fscache_op_wq;
  */
 static int __init fscache_init(void)
 {
-	int ret;
+	int ret = -ENOMEM;
 
-	ret = slow_work_register_user(THIS_MODULE);
-	if (ret < 0)
-		goto error_slow_work;
-
-	ret = -ENOMEM;
 	fscache_object_wq =
 		__create_workqueue("fscache_object", WQ_SINGLE_CPU, 99);
 	if (!fscache_object_wq)
@@ -97,8 +92,6 @@ error_proc:
 error_op_wq:
 	destroy_workqueue(fscache_object_wq);
 error_object_wq:
-	slow_work_unregister_user(THIS_MODULE);
-error_slow_work:
 	return ret;
 }
 
@@ -116,7 +109,6 @@ static void __exit fscache_exit(void)
 	fscache_proc_cleanup();
 	destroy_workqueue(fscache_op_wq);
 	destroy_workqueue(fscache_object_wq);
-	slow_work_unregister_user(THIS_MODULE);
 	printk(KERN_NOTICE "FS-Cache: Unloaded\n");
 }
 
