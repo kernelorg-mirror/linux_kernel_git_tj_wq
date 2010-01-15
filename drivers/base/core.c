@@ -1743,6 +1743,5 @@ void device_shutdown(void)
 			dev->driver->shutdown(dev);
 		}
 	}
-	async_synchronize_full();
 	async_barrier();
 }

@@ -178,7 +178,6 @@ void wait_for_device_probe(void)
 {
 	/* wait for the known devices to complete their probing */
 	wait_event(probe_waitqueue, atomic_read(&probe_count) == 0);
-	async_synchronize_full();
 	async_barrier();
 }
 EXPORT_SYMBOL_GPL(wait_for_device_probe);
