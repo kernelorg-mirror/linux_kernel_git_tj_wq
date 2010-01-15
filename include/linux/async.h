@@ -12,6 +12,7 @@
 
 #include <linux/types.h>
 #include <linux/list.h>
+#include <linux/workqueue.h>
 
 typedef u64 async_cookie_t;
 typedef void (async_func_ptr) (void *data, async_cookie_t cookie);
@@ -25,3 +26,8 @@ extern void async_synchronize_cookie(async_cookie_t cookie);
 extern void async_synchronize_cookie_domain(async_cookie_t cookie,
 					    struct list_head *list);
 
+typedef void (*async_func_t)(void *data);
+
+extern bool async_call(async_func_t func, void *data);
+extern bool async_call_ordered(async_func_t func, void *data);
+extern void async_barrier(void);

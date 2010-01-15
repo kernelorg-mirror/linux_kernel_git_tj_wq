@@ -1744,4 +1744,5 @@ void device_shutdown(void)
 		}
 	}
 	async_synchronize_full();
+	async_barrier();
 }

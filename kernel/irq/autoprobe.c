@@ -39,6 +39,7 @@ unsigned long probe_irq_on(void)
 	 * quiesce the kernel, or at least the asynchronous portion
 	 */
 	async_synchronize_full();
+	async_barrier();
 	mutex_lock(&probing_active);
 	/*
 	 * something may have generated an irq long ago and we want to

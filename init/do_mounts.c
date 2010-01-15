@@ -406,6 +406,7 @@ void __init prepare_namespace(void)
 			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
 			msleep(100);
 		async_synchronize_full();
+		async_barrier();
 	}
 
 	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;

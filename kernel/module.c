@@ -717,6 +717,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
 	async_synchronize_full();
+	async_barrier();
 	mutex_lock(&module_mutex);
 	/* Store the name of the last unloaded module for diagnostic purposes */
 	strlcpy(last_unloaded_module, mod->name, sizeof(last_unloaded_module));
@@ -2494,6 +2495,7 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
 
 	/* We need to finish all async code before the module init sequence is done */
 	async_synchronize_full();
+	async_barrier();
 
 	mutex_lock(&module_mutex);
 	/* Drop initial reference. */
