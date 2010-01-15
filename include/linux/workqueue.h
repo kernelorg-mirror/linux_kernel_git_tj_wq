@@ -214,6 +214,8 @@ enum {
 	WQ_FREEZEABLE		= 1 << 0, /* freeze during suspend */
 	WQ_SINGLE_CPU		= 1 << 1, /* only single cpu at a time */
 	WQ_RESCUER		= 1 << 2, /* has an rescue worker */
+
+	WQ_MAX_ACTIVE		= 256,    /* I like 256, better ideas? */
 };
 
 extern struct workqueue_struct *
@@ -267,7 +269,6 @@ extern int schedule_delayed_work(struct delayed_work *work, unsigned long delay)
 extern int schedule_delayed_work_on(int cpu, struct delayed_work *work,
 					unsigned long delay);
 extern int schedule_on_each_cpu(work_func_t func);
-extern int current_is_keventd(void);
 extern int keventd_up(void);
 
 extern void init_workqueues(void);
