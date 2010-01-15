@@ -40,6 +40,7 @@ MODULE_PARM_DESC(fscache_debug,
 		 "FS-Cache debugging mask");
 
 struct kobject *fscache_root;
+struct workqueue_struct *fscache_object_wq;
 
 /*
  * initialise the fs caching module
@@ -51,6 +52,12 @@ static int __init fscache_init(void)
 	ret = slow_work_register_user(THIS_MODULE);
 	if (ret < 0)
 		goto error_slow_work;
+
+	ret = -ENOMEM;
+	fscache_object_wq =
+		__create_workqueue("fscache_object", WQ_SINGLE_CPU, 99);
+	if (!fscache_object_wq)
+		goto error_object_wq;
 
 	ret = fscache_proc_init();
 	if (ret < 0)
@@ -80,6 +87,8 @@ error_kobj:
 error_cookie_jar:
 	fscache_proc_cleanup();
 error_proc:
+	destroy_workqueue(fscache_object_wq);
+error_object_wq:
 	slow_work_unregister_user(THIS_MODULE);
 error_slow_work:
 	return ret;
@@ -97,6 +106,7 @@ static void __exit fscache_exit(void)
 	kobject_put(fscache_root);
 	kmem_cache_destroy(fscache_cookie_jar);
 	fscache_proc_cleanup();
+	destroy_workqueue(fscache_object_wq);
 	slow_work_unregister_user(THIS_MODULE);
 	printk(KERN_NOTICE "FS-Cache: Unloaded\n");
 }

@@ -50,12 +50,8 @@ const char fscache_object_states_short[FSCACHE_OBJECT__NSTATES][5] = {
 	[FSCACHE_OBJECT_DEAD]		= "DEAD",
 };
 
-static void fscache_object_slow_work_put_ref(struct slow_work *);
-static int  fscache_object_slow_work_get_ref(struct slow_work *);
-static void fscache_object_slow_work_execute(struct slow_work *);
-#ifdef CONFIG_SLOW_WORK_PROC
-static void fscache_object_slow_work_desc(struct slow_work *, struct seq_file *);
-#endif
+static int  fscache_get_object(struct fscache_object *);
+static void fscache_put_object(struct fscache_object *);
 static void fscache_initialise_object(struct fscache_object *);
 static void fscache_lookup_object(struct fscache_object *);
 static void fscache_object_available(struct fscache_object *);
@@ -63,17 +59,6 @@ static void fscache_release_object(struct fscache_object *);
 static void fscache_withdraw_object(struct fscache_object *);
 static void fscache_enqueue_dependents(struct fscache_object *);
 static void fscache_dequeue_object(struct fscache_object *);
-
-const struct slow_work_ops fscache_object_slow_work_ops = {
-	.owner		= THIS_MODULE,
-	.get_ref	= fscache_object_slow_work_get_ref,
-	.put_ref	= fscache_object_slow_work_put_ref,
-	.execute	= fscache_object_slow_work_execute,
-#ifdef CONFIG_SLOW_WORK_PROC
-	.desc		= fscache_object_slow_work_desc,
-#endif
-};
-EXPORT_SYMBOL(fscache_object_slow_work_ops);
 
 /*
  * we need to notify the parent when an op completes that we had outstanding
@@ -345,7 +330,7 @@ unsupported_event:
 /*
  * execute an object
  */
-static void fscache_object_slow_work_execute(struct slow_work *work)
+void fscache_object_work_func(struct work_struct *work)
 {
 	struct fscache_object *object =
 		container_of(work, struct fscache_object, work);
@@ -359,23 +344,9 @@ static void fscache_object_slow_work_execute(struct slow_work *work)
 	if (object->events & object->event_mask)
 		fscache_enqueue_object(object);
 	clear_bit(FSCACHE_OBJECT_EV_REQUEUE, &object->events);
+	fscache_put_object(object);
 }
-
-/*
- * describe an object for slow-work debugging
- */
-#ifdef CONFIG_SLOW_WORK_PROC
-static void fscache_object_slow_work_desc(struct slow_work *work,
-					  struct seq_file *m)
-{
-	struct fscache_object *object =
-		container_of(work, struct fscache_object, work);
-
-	seq_printf(m, "FSC: OBJ%x: %s",
-		   object->debug_id,
-		   fscache_object_states_short[object->state]);
-}
-#endif
+EXPORT_SYMBOL(fscache_object_work_func);
 
 /*
  * initialise an object
@@ -393,7 +364,6 @@ static void fscache_initialise_object(struct fscache_object *object)
 	_enter("");
 	ASSERT(object->cookie != NULL);
 	ASSERT(object->cookie->parent != NULL);
-	ASSERT(list_empty(&object->work.link));
 
 	if (object->events & ((1 << FSCACHE_OBJECT_EV_ERROR) |
 			      (1 << FSCACHE_OBJECT_EV_RELEASE) |
@@ -671,10 +641,8 @@ static void fscache_drop_object(struct fscache_object *object)
 		object->parent = NULL;
 	}
 
-	/* this just shifts the object release to the slow work processor */
-	fscache_stat(&fscache_n_cop_put_object);
-	object->cache->ops->put_object(object);
-	fscache_stat_d(&fscache_n_cop_put_object);
+	/* this just shifts the object release to the work processor */
+	fscache_put_object(object);
 
 	_leave("");
 }
@@ -758,12 +726,10 @@ void fscache_withdrawing_object(struct fscache_cache *cache,
 }
 
 /*
- * allow the slow work item processor to get a ref on an object
+ * get a ref on an object
  */
-static int fscache_object_slow_work_get_ref(struct slow_work *work)
+static int fscache_get_object(struct fscache_object *object)
 {
-	struct fscache_object *object =
-		container_of(work, struct fscache_object, work);
 	int ret;
 
 	fscache_stat(&fscache_n_cop_grab_object);
@@ -773,13 +739,10 @@ static int fscache_object_slow_work_get_ref(struct slow_work *work)
 }
 
 /*
- * allow the slow work item processor to discard a ref on a work item
+ * discard a ref on a work item
  */
-static void fscache_object_slow_work_put_ref(struct slow_work *work)
+static void fscache_put_object(struct fscache_object *object)
 {
-	struct fscache_object *object =
-		container_of(work, struct fscache_object, work);
-
 	fscache_stat(&fscache_n_cop_put_object);
 	object->cache->ops->put_object(object);
 	fscache_stat_d(&fscache_n_cop_put_object);
@@ -792,7 +755,9 @@ void fscache_enqueue_object(struct fscache_object *object)
 {
 	_enter("{OBJ%x}", object->debug_id);
 
-	slow_work_enqueue(&object->work);
+	if (fscache_get_object(object) >= 0)
+		if (!queue_work(fscache_object_wq, &object->work))
+			fscache_put_object(object);
 }
 
 /*
@@ -819,9 +784,7 @@ static void fscache_enqueue_dependents(struct fscache_object *object)
 
 		/* sort onto appropriate lists */
 		fscache_enqueue_object(dep);
-		fscache_stat(&fscache_n_cop_put_object);
-		dep->cache->ops->put_object(dep);
-		fscache_stat_d(&fscache_n_cop_put_object);
+		fscache_put_object(dep);
 
 		if (!list_empty(&object->dependents))
 			cond_resched_lock(&object->lock);

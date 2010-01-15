@@ -82,6 +82,7 @@ extern unsigned fscache_defer_lookup;
 extern unsigned fscache_defer_create;
 extern unsigned fscache_debug;
 extern struct kobject *fscache_root;
+extern struct workqueue_struct *fscache_object_wq;
 
 extern int fscache_wait_bit(void *);
 extern int fscache_wait_bit_interruptible(void *);

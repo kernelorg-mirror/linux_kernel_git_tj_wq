@@ -36,10 +36,9 @@ void __cachefiles_printk_object(struct cachefiles_object *object,
 
 	printk(KERN_ERR "%sobject: OBJ%x\n",
 	       prefix, object->fscache.debug_id);
-	printk(KERN_ERR "%sobjstate=%s fl=%lx swfl=%lx ev=%lx[%lx]\n",
+	printk(KERN_ERR "%sobjstate=%s fl=%lx ev=%lx[%lx]\n",
 	       prefix, fscache_object_states[object->fscache.state],
-	       object->fscache.flags, object->fscache.work.flags,
-	       object->fscache.events,
+	       object->fscache.flags, object->fscache.events,
 	       object->fscache.event_mask & FSCACHE_OBJECT_EVENTS_MASK);
 	printk(KERN_ERR "%sops=%u inp=%u exc=%u\n",
 	       prefix, object->fscache.n_ops, object->fscache.n_in_progress,
@@ -150,15 +149,13 @@ wait_for_old_object:
 	write_unlock(&cache->active_lock);
 
 	if (test_bit(CACHEFILES_OBJECT_ACTIVE, &xobject->flags)) {
-		wait_queue_head_t *wq;
-
 		signed long timeout = 60 * HZ;
+		wait_queue_head_t *wq;
 		wait_queue_t wait;
-		bool requeue;
 
 		/* if the object we're waiting for is queued for processing,
 		 * then just put ourselves on the queue behind it */
-		if (slow_work_is_queued(&xobject->fscache.work)) {
+		if (work_pending(&xobject->fscache.work)) {
 			_debug("queue OBJ%x behind OBJ%x immediately",
 			       object->fscache.debug_id,
 			       xobject->fscache.debug_id);
@@ -166,27 +163,16 @@ wait_for_old_object:
 		}
 
 		/* otherwise we sleep until either the object we're waiting for
-		 * is done, or the slow-work facility wants the thread back to
-		 * do other work */
+		 * is done */
 		wq = bit_waitqueue(&xobject->flags, CACHEFILES_OBJECT_ACTIVE);
 		init_wait(&wait);
-		requeue = false;
 		do {
 			prepare_to_wait(wq, &wait, TASK_UNINTERRUPTIBLE);
 			if (!test_bit(CACHEFILES_OBJECT_ACTIVE, &xobject->flags))
 				break;
-			requeue = slow_work_sleep_till_thread_needed(
-				&object->fscache.work, &timeout);
-		} while (timeout > 0 && !requeue);
+			timeout = schedule_timeout(timeout);
+		} while (timeout > 0);
 		finish_wait(wq, &wait);
-
-		if (requeue &&
-		    test_bit(CACHEFILES_OBJECT_ACTIVE, &xobject->flags)) {
-			_debug("queue OBJ%x behind OBJ%x after wait",
-			       object->fscache.debug_id,
-			       xobject->fscache.debug_id);
-			goto requeue;
-		}
 
 		if (timeout <= 0) {
 			printk(KERN_ERR "\n");
