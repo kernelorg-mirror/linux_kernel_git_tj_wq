@@ -53,6 +53,11 @@ int stop_machine_create(void);
  */
 void stop_machine_destroy(void);
 
+/**
+ * init_stop_machine: initialize stop_machine during boot
+ */
+void init_stop_machine(void);
+
 #else
 
 static inline int stop_machine(int (*fn)(void *), void *data,
@@ -67,6 +72,7 @@ static inline int stop_machine(int (*fn)(void *), void *data,
 
 static inline int stop_machine_create(void) { return 0; }
 static inline void stop_machine_destroy(void) { }
+static inline void init_stop_machine(void) { }
 
 #endif /* CONFIG_SMP */
 #endif /* _LINUX_STOP_MACHINE */

@@ -34,6 +34,7 @@
 #include <linux/security.h>
 #include <linux/smp.h>
 #include <linux/workqueue.h>
+#include <linux/stop_machine.h>
 #include <linux/profile.h>
 #include <linux/rcupdate.h>
 #include <linux/moduleparam.h>
@@ -769,6 +770,7 @@ static void __init do_initcalls(void)
 static void __init do_basic_setup(void)
 {
 	init_workqueues();
+	init_stop_machine();
 	cpuset_init_smp();
 	usermodehelper_init();
 	init_tmpfs();
