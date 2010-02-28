@@ -117,7 +117,7 @@ struct worker {
 	struct list_head	scheduled;	/* L: scheduled works */
 	struct task_struct	*task;		/* I: worker task */
 	struct global_cwq	*gcwq;		/* I: the associated gcwq */
-	unsigned long		last_active;	/* L: last active timestamp */
+	unsigned long		timestamp;	/* L: last active timestamp */
 	/* 64 bytes boundary on 64bit, 32 on 32bit */
 	struct sched_notifier	sched_notifier;	/* I: scheduler notifier */
 	unsigned int		flags;		/* ?: flags */
@@ -152,6 +152,9 @@ struct global_cwq {
 	unsigned int		trustee_state;	/* L: trustee state */
 	wait_queue_head_t	trustee_wait;	/* trustee wait */
 	struct worker		*first_idle;	/* L: first idle worker */
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+	struct worker		*manager;	/* L: the current manager */
+#endif
 } ____cacheline_aligned_in_smp;
 
 /*
@@ -206,6 +209,9 @@ struct workqueue_struct {
 	const char		*name;		/* I: workqueue name */
 #ifdef CONFIG_LOCKDEP
 	struct lockdep_map	lockdep_map;
+#endif
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+	show_work_func_t	show_work;	/* I: show work to debugfs */
 #endif
 };
 
@@ -328,6 +334,27 @@ EXPORT_SYMBOL_GPL(destroy_work_on_stack);
 #else
 static inline void debug_work_activate(struct work_struct *work) { }
 static inline void debug_work_deactivate(struct work_struct *work) { }
+#endif
+
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+static void work_set_queued_at(struct work_struct *work)
+{
+	work->timestamp = jiffies;
+}
+
+static void worker_set_started_at(struct worker *worker)
+{
+	worker->timestamp = jiffies;
+}
+
+static void gcwq_set_manager(struct global_cwq *gcwq, struct worker *worker)
+{
+	gcwq->manager = worker;
+}
+#else
+static void work_set_queued_at(struct work_struct *work) { }
+static void worker_set_started_at(struct worker *worker) { }
+static void gcwq_set_manager(struct global_cwq *gcwq, struct worker *worker) { }
 #endif
 
 /* Serializes the accesses to the list of workqueues. */
@@ -692,6 +719,8 @@ static void insert_work(struct cpu_workqueue_struct *cwq,
 {
 	struct global_cwq *gcwq = cwq->gcwq;
 
+	work_set_queued_at(work);
+
 	/* we own @work, set data and link */
 	set_work_cwq(work, cwq, extra_flags);
 
@@ -971,7 +1000,7 @@ static void worker_enter_idle(struct worker *worker)
 
 	worker->flags |= WORKER_IDLE;
 	gcwq->nr_idle++;
-	worker->last_active = jiffies;
+	worker->timestamp = jiffies;
 
 	/* idle_list is LIFO */
 	list_add(&worker->entry, &gcwq->idle_list);
@@ -1144,7 +1173,7 @@ static void idle_worker_timeout(unsigned long __gcwq)
 
 		/* idle_list is kept in LIFO order, check the last one */
 		worker = list_entry(gcwq->idle_list.prev, struct worker, entry);
-		expires = worker->last_active + IDLE_WORKER_TIMEOUT;
+		expires = worker->timestamp + IDLE_WORKER_TIMEOUT;
 
 		if (time_before(jiffies, expires))
 			mod_timer(&gcwq->idle_timer, expires);
@@ -1282,7 +1311,7 @@ static bool maybe_destroy_workers(struct global_cwq *gcwq)
 		unsigned long expires;
 
 		worker = list_entry(gcwq->idle_list.prev, struct worker, entry);
-		expires = worker->last_active + IDLE_WORKER_TIMEOUT;
+		expires = worker->timestamp + IDLE_WORKER_TIMEOUT;
 
 		if (time_before(jiffies, expires)) {
 			mod_timer(&gcwq->idle_timer, expires);
@@ -1326,6 +1355,7 @@ static bool manage_workers(struct worker *worker)
 
 	gcwq->flags &= ~GCWQ_MANAGE_WORKERS;
 	gcwq->flags |= GCWQ_MANAGING_WORKERS;
+	gcwq_set_manager(gcwq, worker);
 
 	/*
 	 * Destroy and then create so that may_start_working() is true
@@ -1335,6 +1365,7 @@ static bool manage_workers(struct worker *worker)
 	ret |= maybe_create_worker(gcwq);
 
 	gcwq->flags &= ~GCWQ_MANAGING_WORKERS;
+	gcwq_set_manager(gcwq, NULL);
 
 	/*
 	 * The trustee might be waiting to take over the manager
@@ -1499,6 +1530,8 @@ static void process_one_work(struct worker *worker, struct work_struct *work)
 	/* record the current cpu number in the work data and dequeue */
 	set_work_cpu(work, gcwq->cpu);
 	list_del_init(&work->entry);
+
+	worker_set_started_at(worker);
 
 	spin_unlock_irq(&gcwq->lock);
 
@@ -3130,6 +3163,334 @@ out_unlock:
 	spin_unlock(&workqueue_lock);
 }
 #endif /* CONFIG_FREEZER */
+
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+
+#include <linux/seq_file.h>
+#include <linux/log2.h>
+#include <linux/debugfs.h>
+
+/**
+ * workqueue_set_show_work - set show_work callback for a workqueue
+ * @wq: workqueue of interest
+ * @show: show_work callback
+ *
+ * Set show_work callback of @wq to @show.  This is used by workqueue
+ * debugfs support to allow workqueue users to describe the work with
+ * specific details.
+ *
+ * bool (*@show)(struct seq_file *m, struct work_struct *work, bool running);
+ *
+ * It should print to @m without new line.  If @running is set, @show
+ * is responsible for ensuring @work is still accessible.  %true
+ * return suppresses wchan printout.
+ */
+void workqueue_set_show_work(struct workqueue_struct *wq, show_work_func_t show)
+{
+	wq->show_work = show;
+}
+EXPORT_SYMBOL_GPL(workqueue_set_show_work);
+
+enum {
+	ITER_TYPE_MANAGER	= 0,
+	ITER_TYPE_BUSY_WORKER,
+	ITER_TYPE_IDLE_WORKER,
+	ITER_TYPE_PENDING_WORK,
+	ITER_TYPE_DELAYED_WORK,
+	ITER_NR_TYPES,
+
+	/* iter: sign [started bit] [cpu bits] [type bits] [idx bits] */
+	ITER_CPU_BITS		= order_base_2(NR_CPUS),
+	ITER_CPU_MASK		= ((loff_t)1 << ITER_CPU_BITS) - 1,
+	ITER_TYPE_BITS		= order_base_2(ITER_NR_TYPES),
+	ITER_TYPE_MASK		= ((loff_t)1 << ITER_TYPE_BITS) - 1,
+
+	ITER_BITS		= BITS_PER_BYTE * sizeof(loff_t) - 1,
+	ITER_STARTED_BIT	= ITER_BITS - 1,
+	ITER_CPU_SHIFT		= ITER_STARTED_BIT - ITER_CPU_BITS,
+	ITER_TYPE_SHIFT		= ITER_CPU_SHIFT - ITER_TYPE_BITS,
+
+	ITER_IDX_MASK		= ((loff_t)1 << ITER_TYPE_SHIFT) - 1,
+};
+
+struct wq_debugfs_token {
+	struct global_cwq	*gcwq;
+	struct worker		*worker;
+	struct work_struct	*work;
+	bool			work_delayed;
+};
+
+static void wq_debugfs_decode_pos(loff_t pos, unsigned int *cpup, int *typep,
+				  int *idxp)
+{
+	*cpup = (pos >> ITER_CPU_SHIFT) & ITER_CPU_MASK;
+	*typep = (pos >> ITER_TYPE_SHIFT) & ITER_TYPE_MASK;
+	*idxp = pos & ITER_IDX_MASK;
+}
+
+/* try to dereference @pos and set @tok accordingly, %true if successful */
+static bool wq_debugfs_deref_pos(loff_t pos, struct wq_debugfs_token *tok)
+{
+	int type, idx, i;
+	unsigned int cpu;
+	struct global_cwq *gcwq;
+	struct worker *worker;
+	struct work_struct *work;
+	struct hlist_node *hnode;
+	struct workqueue_struct *wq;
+	struct cpu_workqueue_struct *cwq;
+
+	wq_debugfs_decode_pos(pos, &cpu, &type, &idx);
+
+	/* make sure the right gcwq is locked and init @tok */
+	gcwq = get_gcwq(cpu);
+	if (tok->gcwq != gcwq) {
+		if (tok->gcwq)
+			spin_unlock_irq(&tok->gcwq->lock);
+		if (gcwq)
+			spin_lock_irq(&gcwq->lock);
+	}
+	memset(tok, 0, sizeof(*tok));
+	tok->gcwq = gcwq;
+
+	/* dereference index@type and record it in @tok */
+	switch (type) {
+	case ITER_TYPE_MANAGER:
+		if (!idx)
+			tok->worker = gcwq->manager;
+		return tok->worker;
+
+	case ITER_TYPE_BUSY_WORKER:
+		if (idx < gcwq->nr_workers - gcwq->nr_idle)
+			for_each_busy_worker(worker, i, hnode, gcwq)
+				if (!idx--) {
+					tok->worker = worker;
+					return true;
+				}
+		break;
+
+	case ITER_TYPE_IDLE_WORKER:
+		if (idx < gcwq->nr_idle)
+			list_for_each_entry(worker, &gcwq->idle_list, entry)
+				if (!idx--) {
+					tok->worker = worker;
+					return true;
+				}
+		break;
+
+	case ITER_TYPE_PENDING_WORK:
+		list_for_each_entry(work, &gcwq->worklist, entry)
+			if (!idx--) {
+				tok->work = work;
+				return true;
+			}
+		break;
+
+	case ITER_TYPE_DELAYED_WORK:
+		list_for_each_entry(wq, &workqueues, list) {
+			cwq = get_cwq(gcwq->cpu, wq);
+			list_for_each_entry(work, &cwq->delayed_works, entry)
+				if (!idx--) {
+					tok->work = work;
+					tok->work_delayed = true;
+					return true;
+				}
+		}
+		break;
+	}
+	return false;
+}
+
+static bool wq_debugfs_next_pos(loff_t *ppos, bool next_type)
+{
+	int type, idx;
+	unsigned int cpu;
+
+	wq_debugfs_decode_pos(*ppos, &cpu, &type, &idx);
+
+	if (next_type) {
+		/* proceed to the next type */
+		if (++type >= ITER_NR_TYPES) {
+			/* oops, was the last type, to the next cpu */
+			cpu = cpumask_next(cpu, cpu_possible_mask);
+			if (cpu >= nr_cpu_ids)
+				return false;
+			type = ITER_TYPE_MANAGER;
+		}
+		idx = 0;
+	} else	/* bump up the index */
+		idx++;
+
+	*ppos = ((loff_t)1 << ITER_STARTED_BIT) |
+		((loff_t)cpu << ITER_CPU_SHIFT) |
+		((loff_t)type << ITER_TYPE_SHIFT) | idx;
+	return true;
+}
+
+static void wq_debugfs_free_tok(struct wq_debugfs_token *tok)
+{
+	if (tok && tok->gcwq)
+		spin_unlock_irq(&tok->gcwq->lock);
+	kfree(tok);
+}
+
+static void *wq_debugfs_start(struct seq_file *m, loff_t *ppos)
+{
+	struct wq_debugfs_token *tok;
+
+	if (*ppos == 0) {
+		seq_puts(m, "CPU  ID   PID   WORK ADDR        WORKQUEUE    TIME  DESC\n");
+		seq_puts(m, "==== ==== ===== ================ ============ ===== ============================\n");
+		*ppos = (loff_t)1 << ITER_STARTED_BIT |
+		      (loff_t)cpumask_first(cpu_possible_mask) << ITER_CPU_BITS;
+	}
+
+	tok = kzalloc(sizeof(*tok), GFP_KERNEL);
+	if (!tok)
+		return ERR_PTR(-ENOMEM);
+
+	spin_lock(&workqueue_lock);
+
+	while (!wq_debugfs_deref_pos(*ppos, tok)) {
+		if (!wq_debugfs_next_pos(ppos, true)) {
+			wq_debugfs_free_tok(tok);
+			return NULL;
+		}
+	}
+	return tok;
+}
+
+static void *wq_debugfs_next(struct seq_file *m, void *p, loff_t *ppos)
+{
+	struct wq_debugfs_token *tok = p;
+
+	wq_debugfs_next_pos(ppos, false);
+
+	while (!wq_debugfs_deref_pos(*ppos, tok)) {
+		if (!wq_debugfs_next_pos(ppos, true)) {
+			wq_debugfs_free_tok(tok);
+			return NULL;
+		}
+	}
+	return tok;
+}
+
+static void wq_debugfs_stop(struct seq_file *m, void *p)
+{
+	wq_debugfs_free_tok(p);
+	spin_unlock(&workqueue_lock);
+}
+
+static void wq_debugfs_print_duration(struct seq_file *m,
+				      unsigned long timestamp)
+{
+	const char *units[] =	{ "us", "ms", " s", " m", " h", " d" };
+	const int factors[] =	{ 1000, 1000,   60,   60,   24,    0 };
+	unsigned long v = jiffies_to_usecs(jiffies - timestamp);
+	int i;
+
+	for (i = 0; v > 999 && i < ARRAY_SIZE(units) - 1; i++)
+		v /= factors[i];
+
+	seq_printf(m, "%3lu%s ", v, units[i]);
+}
+
+static int wq_debugfs_show(struct seq_file *m, void *p)
+{
+	struct wq_debugfs_token *tok = p;
+	struct worker *worker = NULL;
+	struct global_cwq *gcwq;
+	struct work_struct *work;
+	struct workqueue_struct *wq;
+	const char *name;
+	unsigned long timestamp;
+	char id_buf[11] = "", pid_buf[11] = "", addr_buf[17] = "";
+	bool showed = false;
+
+	if (tok->work) {
+		work = tok->work;
+		gcwq = get_work_gcwq(work);
+		wq = get_work_cwq(work)->wq;
+		name = wq->name;
+		timestamp = work->timestamp;
+
+		if (tok->work_delayed)
+			strncpy(id_buf, "DELA", sizeof(id_buf));
+		else
+			strncpy(id_buf, "PEND", sizeof(id_buf));
+	} else {
+		worker = tok->worker;
+		gcwq = worker->gcwq;
+		work = worker->current_work;
+		timestamp = worker->timestamp;
+
+		snprintf(id_buf, sizeof(id_buf), "%4d", worker->id);
+		snprintf(pid_buf, sizeof(pid_buf), "%4d",
+			 task_pid_nr(worker->task));
+
+		if (work) {
+			wq = worker->current_cwq->wq;
+			name = wq->name;
+		} else {
+			wq = NULL;
+			if (worker->gcwq->manager == worker)
+				name = "<MANAGER>";
+			else
+				name = "<IDLE>";
+		}
+	}
+
+	if (work)
+		snprintf(addr_buf, sizeof(addr_buf), "%16p", work);
+
+	seq_printf(m, "%4d %4s %5s %16s %-12s ",
+		   gcwq->cpu, id_buf, pid_buf, addr_buf, name);
+
+	wq_debugfs_print_duration(m, timestamp);
+
+	if (wq && work && wq->show_work)
+		showed = wq->show_work(m, work, worker != NULL);
+	if (!showed && worker && work) {
+		char buf[KSYM_SYMBOL_LEN];
+
+		sprint_symbol(buf, get_wchan(worker->task));
+		seq_printf(m, "%s", buf);
+	}
+
+	seq_putc(m, '\n');
+
+	return 0;
+}
+
+static const struct seq_operations wq_debugfs_ops = {
+	.start		= wq_debugfs_start,
+	.next		= wq_debugfs_next,
+	.stop		= wq_debugfs_stop,
+	.show		= wq_debugfs_show,
+};
+
+static int wq_debugfs_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &wq_debugfs_ops);
+}
+
+static const struct file_operations wq_debugfs_fops = {
+	.owner		= THIS_MODULE,
+	.open		= wq_debugfs_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+
+static int __init init_workqueue_debugfs(void)
+{
+	debugfs_create_file("workqueue", S_IFREG | 0400, NULL, NULL,
+			    &wq_debugfs_fops);
+	return 0;
+}
+late_initcall(init_workqueue_debugfs);
+
+#endif /* CONFIG_WORKQUEUE_DEBUGFS */
 
 void __init init_workqueues(void)
 {

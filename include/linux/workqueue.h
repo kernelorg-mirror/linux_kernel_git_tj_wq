@@ -17,6 +17,10 @@ struct workqueue_struct;
 struct work_struct;
 typedef void (*work_func_t)(struct work_struct *work);
 
+struct seq_file;
+typedef bool (*show_work_func_t)(struct seq_file *m, struct work_struct *work,
+				 bool running);
+
 /*
  * The first word is the work queue pointer and the flags rolled into
  * one
@@ -69,6 +73,9 @@ struct work_struct {
 	work_func_t func;
 #ifdef CONFIG_LOCKDEP
 	struct lockdep_map lockdep_map;
+#endif
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+	unsigned long timestamp;	/* timestamp for debugfs */
 #endif
 };
 
@@ -281,6 +288,11 @@ __create_workqueue_key(const char *name, unsigned int flags, int max_active,
 			   WQ_FREEZEABLE | WQ_SINGLE_CPU | WQ_RESCUER, 1)
 #define create_singlethread_workqueue(name)			\
 	__create_workqueue((name), WQ_SINGLE_CPU | WQ_RESCUER, 1)
+
+#ifdef CONFIG_WORKQUEUE_DEBUGFS
+extern void workqueue_set_show_work(struct workqueue_struct *wq,
+				    show_work_func_t show);
+#endif
 
 extern void destroy_workqueue(struct workqueue_struct *wq);
 

@@ -1054,6 +1054,13 @@ config DMA_API_DEBUG
 	  This option causes a performance degredation.  Use only if you want
 	  to debug device drivers. If unsure, say N.
 
+config WORKQUEUE_DEBUGFS
+	bool "Enable workqueue debugging info via debugfs"
+	depends on DEBUG_FS
+	help
+	  Enable debug FS support for workqueue.  Information about all the
+	  current workers and works is available through <debugfs>/workqueue.
+
 source "samples/Kconfig"
 
 source "lib/Kconfig.kgdb"
