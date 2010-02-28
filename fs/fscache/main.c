@@ -42,11 +42,13 @@ MODULE_PARM_DESC(fscache_debug,
 
 struct kobject *fscache_root;
 struct workqueue_struct *fscache_object_wq;
+struct workqueue_struct *fscache_op_wq;
 
 DEFINE_PER_CPU(wait_queue_head_t, fscache_object_cong_wait);
 
 /* these values serve as lower bounds, will be adjusted in fscache_init() */
 static unsigned fscache_object_max_active = 4;
+static unsigned fscache_op_max_active = 2;
 
 #ifdef CONFIG_SYSCTL
 static struct ctl_table_header *fscache_sysctl_header;
@@ -73,6 +75,14 @@ ctl_table fscache_sysctls[] = {
 		.mode		= 0644,
 		.proc_handler	= fscache_max_active_sysctl,
 		.extra1		= &fscache_object_wq,
+	},
+	{
+		.procname	= "operation_max_active",
+		.data		= &fscache_op_max_active,
+		.maxlen		= sizeof(unsigned),
+		.mode		= 0644,
+		.proc_handler	= fscache_max_active_sysctl,
+		.extra1		= &fscache_op_wq,
 	},
 	{}
 };
@@ -102,6 +112,21 @@ static bool fscache_object_show_work(struct seq_file *m,
 		   fscache_object_states_short[object->state]);
 	return true;
 }
+
+/*
+ * describe an operation for slow-work debugging
+ */
+static bool fscache_op_show_work(struct seq_file *m,
+				 struct work_struct *work, bool running)
+{
+	struct fscache_operation *op =
+		container_of(work, struct fscache_operation, work);
+
+	seq_printf(m, "FSC: OBJ%x OP%x: %s/%s fl=%lx",
+		   op->object->debug_id, op->debug_id,
+		   op->name, op->state, op->flags);
+	return true;
+}
 #endif
 
 /*
@@ -127,8 +152,19 @@ static int __init fscache_init(void)
 	if (!fscache_object_wq)
 		goto error_object_wq;
 
+	fscache_op_max_active = clamp_val(fscache_object_max_active / 2,
+					  fscache_op_max_active, WQ_MAX_ACTIVE);
+
+	ret = -ENOMEM;
+	fscache_op_wq =
+		__create_workqueue("fscache_operation", WQ_NON_REENTRANT,
+				   fscache_op_max_active);
+	if (!fscache_op_wq)
+		goto error_op_wq;
+
 #ifdef CONFIG_WORKQUEUE_DEBUGFS
 	workqueue_set_show_work(fscache_object_wq, fscache_object_show_work);
+	workqueue_set_show_work(fscache_op_wq, fscache_op_show_work);
 #endif
 
 	for_each_possible_cpu(cpu)
@@ -173,6 +209,8 @@ error_sysctl:
 #endif
 	fscache_proc_cleanup();
 error_proc:
+	destroy_workqueue(fscache_op_wq);
+error_op_wq:
 	destroy_workqueue(fscache_object_wq);
 error_object_wq:
 	slow_work_unregister_user(THIS_MODULE);
@@ -193,6 +231,7 @@ static void __exit fscache_exit(void)
 	kmem_cache_destroy(fscache_cookie_jar);
 	unregister_sysctl_table(fscache_sysctl_header);
 	fscache_proc_cleanup();
+	destroy_workqueue(fscache_op_wq);
 	destroy_workqueue(fscache_object_wq);
 	slow_work_unregister_user(THIS_MODULE);
 	printk(KERN_NOTICE "FS-Cache: Unloaded\n");
