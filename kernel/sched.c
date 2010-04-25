@@ -2262,12 +2262,12 @@ static int select_fallback_rq(int cpu, struct task_struct *p)
 	const struct cpumask *nodemask = cpumask_of_node(cpu_to_node(cpu));
 
 	/* Look for allowed, online CPU in same node. */
-	for_each_cpu_and(dest_cpu, nodemask, cpu_active_mask)
+	for_each_cpu_and(dest_cpu, nodemask, cpu_online_mask)
 		if (cpumask_test_cpu(dest_cpu, &p->cpus_allowed))
 			return dest_cpu;
 
 	/* Any allowed, online CPU? */
-	dest_cpu = cpumask_any_and(&p->cpus_allowed, cpu_active_mask);
+	dest_cpu = cpumask_any_and(&p->cpus_allowed, cpu_online_mask);
 	if (dest_cpu < nr_cpu_ids)
 		return dest_cpu;
 
