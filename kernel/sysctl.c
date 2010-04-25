@@ -49,7 +49,6 @@
 #include <linux/acpi.h>
 #include <linux/reboot.h>
 #include <linux/ftrace.h>
-#include <linux/slow-work.h>
 #include <linux/perf_event.h>
 #include <linux/kprobes.h>
 
@@ -876,13 +875,6 @@ static struct ctl_table kern_table[] = {
 		.maxlen         = sizeof(int),
 		.mode           = 0644,
 		.proc_handler	= proc_dointvec,
-	},
-#endif
-#ifdef CONFIG_SLOW_WORK
-	{
-		.procname	= "slow-work",
-		.mode		= 0555,
-		.child		= slow_work_sysctls,
 	},
 #endif
 #ifdef CONFIG_PERF_EVENTS
