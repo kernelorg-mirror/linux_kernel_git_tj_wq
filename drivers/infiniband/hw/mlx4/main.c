@@ -1212,7 +1212,7 @@ static int __init mlx4_ib_init(void)
 {
 	int err;
 
-	wq = create_singlethread_workqueue("mlx4_ib");
+	wq = alloc_ordered_workqueue("mlx4_ib", 0);
 	if (!wq)
 		return -ENOMEM;
 

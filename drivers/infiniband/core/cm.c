@@ -3804,7 +3804,7 @@ static int __init ib_cm_init(void)
 	if (ret)
 		return -ENOMEM;
 
-	cm.wq = create_workqueue("ib_cm");
+	cm.wq = alloc_workqueue("ib_cm", 0, 0);
 	if (!cm.wq) {
 		ret = -ENOMEM;
 		goto error1;

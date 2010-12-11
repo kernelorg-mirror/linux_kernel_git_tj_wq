@@ -2356,7 +2356,7 @@ int __init c4iw_cm_init(void)
 	spin_lock_init(&timeout_lock);
 	skb_queue_head_init(&rxq);
 
-	workq = create_singlethread_workqueue("iw_cxgb4");
+	workq = alloc_ordered_workqueue("iw_cxgb4", 0);
 	if (!workq)
 		return -ENOMEM;
 

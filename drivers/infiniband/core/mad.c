@@ -2839,7 +2839,7 @@ static int ib_mad_port_open(struct ib_device *device,
 		goto error7;
 
 	snprintf(name, sizeof name, "ib_mad%d", port_num);
-	port_priv->wq = create_singlethread_workqueue(name);
+	port_priv->wq = alloc_ordered_workqueue(name, 0);
 	if (!port_priv->wq) {
 		ret = -ENOMEM;
 		goto error8;

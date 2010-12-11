@@ -1015,7 +1015,7 @@ EXPORT_SYMBOL(iw_cm_init_qp_attr);
 
 static int __init iw_cm_init(void)
 {
-	iwcm_wq = create_singlethread_workqueue("iw_cm_wq");
+	iwcm_wq = alloc_ordered_workqueue("iw_cm_wq", 0);
 	if (!iwcm_wq)
 		return -ENOMEM;
 

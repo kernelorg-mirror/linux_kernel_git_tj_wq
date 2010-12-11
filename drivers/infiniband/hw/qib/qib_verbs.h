@@ -805,7 +805,6 @@ static inline int qib_send_ok(struct qib_qp *qp)
 		 !(qp->s_flags & QIB_S_ANY_WAIT_SEND));
 }
 
-extern struct workqueue_struct *qib_wq;
 extern struct workqueue_struct *qib_cq_wq;
 
 /*
@@ -815,10 +814,10 @@ static inline void qib_schedule_send(struct qib_qp *qp)
 {
 	if (qib_send_ok(qp)) {
 		if (qp->processor_id == smp_processor_id())
-			queue_work(qib_wq, &qp->s_work);
+			queue_work(ib_wq, &qp->s_work);
 		else
 			queue_work_on(qp->processor_id,
-				      qib_wq, &qp->s_work);
+				      ib_wq, &qp->s_work);
 	}
 }
 

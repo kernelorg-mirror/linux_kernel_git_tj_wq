@@ -1435,7 +1435,7 @@ static int __init ipoib_init_module(void)
 	 * so flush_scheduled_work() can deadlock during device
 	 * removal.
 	 */
-	ipoib_workqueue = create_singlethread_workqueue("ipoib");
+	ipoib_workqueue = alloc_ordered_workqueue("ipoib", 0);
 	if (!ipoib_workqueue) {
 		ret = -ENOMEM;
 		goto err_fs;
