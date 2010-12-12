@@ -1252,13 +1252,13 @@ static int crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	cc->start = tmpll;
 
 	ret = -ENOMEM;
-	cc->io_queue = create_singlethread_workqueue("kcryptd_io");
+	cc->io_queue = alloc_ordered_workqueue("kcryptd_io", WQ_MEM_RECLAIM);
 	if (!cc->io_queue) {
 		ti->error = "Couldn't create kcryptd io queue";
 		goto bad;
 	}
 
-	cc->crypt_queue = create_singlethread_workqueue("kcryptd");
+	cc->crypt_queue = alloc_ordered_workqueue("kcryptd", WQ_MEM_RECLAIM);
 	if (!cc->crypt_queue) {
 		ti->error = "Couldn't create kcryptd queue";
 		goto bad;
