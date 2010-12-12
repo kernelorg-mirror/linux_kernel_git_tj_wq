@@ -1077,7 +1077,8 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = dm_rh_get_region_size(ms->rh);
 	ti->num_flush_requests = 1;
 
-	ms->kmirrord_wq = alloc_ordered_workqueue("kmirrord", WQ_MEM_RECLAIM);
+	ms->kmirrord_wq = alloc_workqueue("kmirrord",
+					  WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (!ms->kmirrord_wq) {
 		DMERR("couldn't start kmirrord");
 		r = -ENOMEM;
