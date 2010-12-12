@@ -75,7 +75,7 @@ int fb_deferred_io_fsync(struct file *file, int datasync)
 		return 0;
 
 	/* Kill off the delayed work */
-	cancel_rearming_delayed_work(&info->deferred_work);
+	cancel_delayed_work_sync(&info->deferred_work);
 
 	/* Run it immediately */
 	return schedule_delayed_work(&info->deferred_work, 0);
@@ -216,8 +216,7 @@ void fb_deferred_io_cleanup(struct fb_info *info)
 	int i;
 
 	BUG_ON(!fbdefio);
-	cancel_delayed_work(&info->deferred_work);
-	flush_scheduled_work();
+	cancel_delayed_work_sync(&info->deferred_work);
 
 	/* clear out the mapping that we setup */
 	for (i = 0 ; i < info->fix.smem_len; i += PAGE_SIZE) {
