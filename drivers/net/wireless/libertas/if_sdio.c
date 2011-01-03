@@ -129,7 +129,6 @@ struct if_sdio_card {
 	spinlock_t		lock;
 	struct if_sdio_packet	*packets;
 
-	struct workqueue_struct	*workqueue;
 	struct work_struct	packet_worker;
 
 	u8			rx_unit;
@@ -828,7 +827,7 @@ static int if_sdio_host_to_card(struct lbs_private *priv,
 
 	spin_unlock_irqrestore(&card->lock, flags);
 
-	queue_work(card->workqueue, &card->packet_worker);
+	schedule_work(&card->packet_worker);
 
 	ret = 0;
 
@@ -986,7 +985,6 @@ static int if_sdio_probe(struct sdio_func *func,
 	}
 
 	spin_lock_init(&card->lock);
-	card->workqueue = create_workqueue("libertas_sdio");
 	INIT_WORK(&card->packet_worker, if_sdio_host_to_card_worker);
 
 	/* Check if we support this card */
@@ -1114,7 +1112,7 @@ out:
 	return ret;
 
 err_activate_card:
-	flush_workqueue(card->workqueue);
+	flush_work_sync(&card->packet_worker);
 	lbs_remove_card(priv);
 reclaim:
 	sdio_claim_host(func);
@@ -1125,7 +1123,6 @@ disable:
 release:
 	sdio_release_host(func);
 free:
-	destroy_workqueue(card->workqueue);
 	while (card->packets) {
 		packet = card->packets;
 		card->packets = card->packets->next;
@@ -1171,8 +1168,7 @@ static void if_sdio_remove(struct sdio_func *func)
 	lbs_stop_card(card->priv);
 	lbs_remove_card(card->priv);
 
-	flush_workqueue(card->workqueue);
-	destroy_workqueue(card->workqueue);
+	flush_work_sync(&card->packet_worker);
 
 	sdio_claim_host(func);
 	sdio_release_irq(func);

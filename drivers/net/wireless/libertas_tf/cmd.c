@@ -623,7 +623,7 @@ static struct cmd_ctrl_node *__lbtf_cmd_async(struct lbtf_private *priv,
 		lbtf_deb_host("PREP_CMD: cmdnode is NULL\n");
 
 		/* Wake up main thread to execute next command */
-		queue_work(lbtf_wq, &priv->cmd_work);
+		schedule_work(&priv->cmd_work);
 		cmdnode = ERR_PTR(-ENOBUFS);
 		goto done;
 	}
@@ -645,7 +645,7 @@ static struct cmd_ctrl_node *__lbtf_cmd_async(struct lbtf_private *priv,
 
 	cmdnode->cmdwaitqwoken = 0;
 	lbtf_queue_cmd(priv, cmdnode);
-	queue_work(lbtf_wq, &priv->cmd_work);
+	schedule_work(&priv->cmd_work);
 
  done:
 	lbtf_deb_leave_args(LBTF_DEB_HOST, "ret %p", cmdnode);
@@ -707,7 +707,7 @@ EXPORT_SYMBOL_GPL(__lbtf_cmd);
 void lbtf_cmd_response_rx(struct lbtf_private *priv)
 {
 	priv->cmd_response_rxed = 1;
-	queue_work(lbtf_wq, &priv->cmd_work);
+	schedule_work(&priv->cmd_work);
 }
 EXPORT_SYMBOL_GPL(lbtf_cmd_response_rx);
 

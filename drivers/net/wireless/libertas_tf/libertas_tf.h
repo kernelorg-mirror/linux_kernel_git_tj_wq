@@ -156,8 +156,6 @@ enum mv_ms_type {
 	MVMS_EVENT
 };
 
-extern struct workqueue_struct *lbtf_wq;
-
 struct lbtf_private;
 
 struct lbtf_offset_value {

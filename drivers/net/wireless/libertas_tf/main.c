@@ -31,8 +31,6 @@ static const char lbtf_driver_version[] = "THINFIRM-USB8388-" DRIVER_RELEASE_VER
 #endif
 	"";
 
-struct workqueue_struct *lbtf_wq;
-
 static const struct ieee80211_channel lbtf_channels[] = {
 	{ .center_freq = 2412, .hw_value = 1 },
 	{ .center_freq = 2417, .hw_value = 2 },
@@ -188,7 +186,7 @@ static void command_timer_fn(unsigned long data)
 		le16_to_cpu(priv->cur_cmd->cmdbuf->command));
 
 	priv->cmd_timed_out = 1;
-	queue_work(lbtf_wq, &priv->cmd_work);
+	schedule_work(&priv->cmd_work);
 out:
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
 	lbtf_deb_leave(LBTF_DEB_CMD);
@@ -230,7 +228,7 @@ static int lbtf_op_tx(struct ieee80211_hw *hw, struct sk_buff *skb)
 	struct lbtf_private *priv = hw->priv;
 
 	priv->skb_to_tx = skb;
-	queue_work(lbtf_wq, &priv->tx_work);
+	schedule_work(&priv->tx_work);
 	/*
 	 * queue will be restarted when we receive transmission feedback if
 	 * there are no buffered multicast frames to send
@@ -706,7 +704,7 @@ void lbtf_send_tx_feedback(struct lbtf_private *priv, u8 retrycnt, u8 fail)
 	if (!priv->skb_to_tx && skb_queue_empty(&priv->bc_ps_buf))
 		ieee80211_wake_queues(priv->hw);
 	else
-		queue_work(lbtf_wq, &priv->tx_work);
+		schedule_work(&priv->tx_work);
 }
 EXPORT_SYMBOL_GPL(lbtf_send_tx_feedback);
 
@@ -726,7 +724,7 @@ void lbtf_bcn_sent(struct lbtf_private *priv)
 		}
 		if (tx_buff_bc) {
 			ieee80211_stop_queues(priv->hw);
-			queue_work(lbtf_wq, &priv->tx_work);
+			schedule_work(&priv->tx_work);
 		}
 	}
 
@@ -742,11 +740,6 @@ EXPORT_SYMBOL_GPL(lbtf_bcn_sent);
 static int __init lbtf_init_module(void)
 {
 	lbtf_deb_enter(LBTF_DEB_MAIN);
-	lbtf_wq = create_workqueue("libertastf");
-	if (lbtf_wq == NULL) {
-		printk(KERN_ERR "libertastf: couldn't create workqueue\n");
-		return -ENOMEM;
-	}
 	lbtf_deb_leave(LBTF_DEB_MAIN);
 	return 0;
 }
@@ -754,7 +747,6 @@ static int __init lbtf_init_module(void)
 static void __exit lbtf_exit_module(void)
 {
 	lbtf_deb_enter(LBTF_DEB_MAIN);
-	destroy_workqueue(lbtf_wq);
 	lbtf_deb_leave(LBTF_DEB_MAIN);
 }
 
