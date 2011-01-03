@@ -74,7 +74,6 @@ struct vio_port {
 	struct srp_rport *rport;
 };
 
-static struct workqueue_struct *vtgtd;
 static struct scsi_transport_template *ibmvstgt_transport_template;
 
 /*
@@ -546,7 +545,7 @@ static irqreturn_t ibmvstgt_interrupt(int dummy, void *data)
 	struct vio_port *vport = target_to_port(target);
 
 	vio_disable_interrupts(vport->dma_dev);
-	queue_work(vtgtd, &vport->crq_work);
+	schedule_work(&vport->crq_work);
 
 	return IRQ_HANDLED;
 }
@@ -900,6 +899,7 @@ static int ibmvstgt_remove(struct vio_dev *dev)
 	crq_queue_destroy(target);
 	srp_remove_host(shost);
 	scsi_remove_host(shost);
+	flush_work_sync(&vport->crq_work);
 	scsi_tgt_free_queue(shost);
 	srp_target_free(target);
 	kfree(vport);
@@ -967,21 +967,15 @@ static int __init ibmvstgt_init(void)
 	if (!ibmvstgt_transport_template)
 		return err;
 
-	vtgtd = create_workqueue("ibmvtgtd");
-	if (!vtgtd)
-		goto release_transport;
-
 	err = get_system_info();
 	if (err)
-		goto destroy_wq;
+		goto release_transport;
 
 	err = vio_register_driver(&ibmvstgt_driver);
 	if (err)
-		goto destroy_wq;
+		goto release_transport;
 
 	return 0;
-destroy_wq:
-	destroy_workqueue(vtgtd);
 release_transport:
 	srp_release_transport(ibmvstgt_transport_template);
 	return err;
@@ -991,7 +985,6 @@ static void __exit ibmvstgt_exit(void)
 {
 	printk("Unregister IBM virtual SCSI driver\n");
 
-	destroy_workqueue(vtgtd);
 	vio_unregister_driver(&ibmvstgt_driver);
 	srp_release_transport(ibmvstgt_transport_template);
 }
