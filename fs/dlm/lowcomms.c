@@ -1430,20 +1430,17 @@ static void work_stop(void)
 
 static int work_start(void)
 {
-	int error;
-	recv_workqueue = create_workqueue("dlm_recv");
-	error = IS_ERR(recv_workqueue);
-	if (error) {
-		log_print("can't start dlm_recv %d", error);
-		return error;
+	recv_workqueue = alloc_workqueue("dlm_recv", 0, 1);
+	if (!recv_workqueue) {
+		log_print("can't start dlm_recv");
+		return -ENOMEM;
 	}
 
-	send_workqueue = create_singlethread_workqueue("dlm_send");
-	error = IS_ERR(send_workqueue);
-	if (error) {
-		log_print("can't start dlm_send %d", error);
+	send_workqueue = alloc_ordered_workqueue("dlm_send", 0);
+	if (!send_workqueue) {
+		log_print("can't start dlm_send");
 		destroy_workqueue(recv_workqueue);
-		return error;
+		return -ENOMEM;
 	}
 
 	return 0;
