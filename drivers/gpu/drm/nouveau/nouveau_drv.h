@@ -580,7 +580,6 @@ struct drm_nouveau_private {
 
 	struct nouveau_bo *vga_ram;
 
-	struct workqueue_struct *wq;
 	struct work_struct irq_work;
 	struct work_struct hpd_work;
 

@@ -1110,7 +1110,7 @@ nv50_display_irq_handler(struct drm_device *dev)
 		dev_priv->hpd_state.hpd1_bits |= hpd1_bits;
 		spin_unlock(&dev_priv->hpd_state.lock);
 
-		queue_work(dev_priv->wq, &dev_priv->hpd_work);
+		schedule_work(&dev_priv->hpd_work);
 	}
 
 	while (nv_rd32(dev, NV50_PMC_INTR_0) & NV50_PMC_INTR_0_DISPLAY) {
@@ -1139,7 +1139,7 @@ nv50_display_irq_handler(struct drm_device *dev)
 		if (clock) {
 			nv_wr32(dev, NV03_PMC_INTR_EN_0, 0);
 			if (!work_pending(&dev_priv->irq_work))
-				queue_work(dev_priv->wq, &dev_priv->irq_work);
+				schedule_work(&dev_priv->irq_work);
 			delayed |= clock;
 			intr1 &= ~clock;
 		}
