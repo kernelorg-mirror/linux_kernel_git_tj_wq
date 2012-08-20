@@ -670,8 +670,8 @@ int nfc_hci_register_device(struct nfc_hci_dev *hdev)
 
 	INIT_WORK(&hdev->msg_tx_work, nfc_hci_msg_tx_work);
 	snprintf(name, sizeof(name), "%s_hci_msg_tx_wq", devname);
-	hdev->msg_tx_wq = alloc_workqueue(name, WQ_NON_REENTRANT | WQ_UNBOUND |
-					  WQ_MEM_RECLAIM, 1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	hdev->msg_tx_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (hdev->msg_tx_wq == NULL) {
 		r = -ENOMEM;
 		goto exit;
@@ -685,8 +685,8 @@ int nfc_hci_register_device(struct nfc_hci_dev *hdev)
 
 	INIT_WORK(&hdev->msg_rx_work, nfc_hci_msg_rx_work);
 	snprintf(name, sizeof(name), "%s_hci_msg_rx_wq", devname);
-	hdev->msg_rx_wq = alloc_workqueue(name, WQ_NON_REENTRANT | WQ_UNBOUND |
-					  WQ_MEM_RECLAIM, 1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	hdev->msg_rx_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (hdev->msg_rx_wq == NULL) {
 		r = -ENOMEM;
 		goto exit;

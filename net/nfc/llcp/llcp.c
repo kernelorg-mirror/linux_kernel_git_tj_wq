@@ -1150,10 +1150,8 @@ int nfc_llcp_register_device(struct nfc_dev *ndev)
 	skb_queue_head_init(&local->tx_queue);
 	INIT_WORK(&local->tx_work, nfc_llcp_tx_work);
 	snprintf(name, sizeof(name), "%s_llcp_tx_wq", dev_name(dev));
-	local->tx_wq =
-		alloc_workqueue(name,
-				WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM,
-				1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	local->tx_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (local->tx_wq == NULL) {
 		err = -ENOMEM;
 		goto err_local;
@@ -1162,10 +1160,8 @@ int nfc_llcp_register_device(struct nfc_dev *ndev)
 	local->rx_pending = NULL;
 	INIT_WORK(&local->rx_work, nfc_llcp_rx_work);
 	snprintf(name, sizeof(name), "%s_llcp_rx_wq", dev_name(dev));
-	local->rx_wq =
-		alloc_workqueue(name,
-				WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM,
-				1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	local->rx_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (local->rx_wq == NULL) {
 		err = -ENOMEM;
 		goto err_tx_wq;
@@ -1173,10 +1169,8 @@ int nfc_llcp_register_device(struct nfc_dev *ndev)
 
 	INIT_WORK(&local->timeout_work, nfc_llcp_timeout_work);
 	snprintf(name, sizeof(name), "%s_llcp_timeout_wq", dev_name(dev));
-	local->timeout_wq =
-		alloc_workqueue(name,
-				WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM,
-				1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	local->timeout_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (local->timeout_wq == NULL) {
 		err = -ENOMEM;
 		goto err_rx_wq;

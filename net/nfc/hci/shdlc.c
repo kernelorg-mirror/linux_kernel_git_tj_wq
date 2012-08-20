@@ -877,8 +877,8 @@ struct nfc_shdlc *nfc_shdlc_allocate(struct nfc_shdlc_ops *ops,
 
 	INIT_WORK(&shdlc->sm_work, nfc_shdlc_sm_work);
 	snprintf(name, sizeof(name), "%s_shdlc_sm_wq", devname);
-	shdlc->sm_wq = alloc_workqueue(name, WQ_NON_REENTRANT | WQ_UNBOUND |
-				       WQ_MEM_RECLAIM, 1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	shdlc->sm_wq = alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
 	if (shdlc->sm_wq == NULL)
 		goto err_allocwq;
 

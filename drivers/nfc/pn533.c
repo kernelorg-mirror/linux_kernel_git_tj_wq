@@ -2334,9 +2334,8 @@ static int pn533_probe(struct usb_interface *interface,
 	INIT_WORK(&dev->mi_work, pn533_wq_mi_recv);
 	INIT_WORK(&dev->tg_work, pn533_wq_tg_get_data);
 	INIT_WORK(&dev->poll_work, pn533_wq_poll);
-	dev->wq = alloc_workqueue("pn533",
-				  WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM,
-				  1);
+	/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+	dev->wq = alloc_ordered_workqueue("pn533", WQ_MEM_RECLAIM);
 	if (dev->wq == NULL)
 		goto error;
 

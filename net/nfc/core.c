@@ -791,9 +791,9 @@ struct nfc_dev *nfc_allocate_device(struct nfc_ops *ops,
 
 		INIT_WORK(&dev->check_pres_work, nfc_check_pres_work);
 		snprintf(name, sizeof(name), "nfc%d_check_pres_wq", dev->idx);
-		dev->check_pres_wq = alloc_workqueue(name, WQ_NON_REENTRANT |
-						     WQ_UNBOUND |
-						     WQ_MEM_RECLAIM, 1);
+		/* XXX tj - why does NFC need WQ_MEM_RECLAIM? */
+		dev->check_pres_wq = alloc_ordered_workqueue(name,
+							     WQ_MEM_RECLAIM);
 		if (dev->check_pres_wq == NULL) {
 			kfree(dev);
 			return NULL;

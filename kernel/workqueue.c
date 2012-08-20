@@ -3185,6 +3185,9 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	unsigned int cpu;
 	size_t namelen;
 
+	WARN(flags & WQ_NON_REENTRANT,
+	     "workqueue: WQ_NON_REENTRANT is deprecated, all workqueues are non-reentrant\n");
+
 	/* determine namelen, allocate wq and format name */
 	va_start(args, lock_name);
 	va_copy(args1, args);

@@ -139,7 +139,6 @@ struct nvec_platform_data {
  * @nvec_status_notifier: Internal notifier (see nvec_status_notifier())
  * @rx_work: A work structure for the RX worker nvec_dispatch()
  * @tx_work: A work structure for the TX worker nvec_request_master()
- * @wq: The work queue in which @rx_work and @tx_work are executed
  * @rx: The message currently being retrieved or %NULL
  * @msg_pool: A pool of messages for allocation
  * @tx: The message currently being transferred
@@ -165,7 +164,6 @@ struct nvec_chip {
 	struct list_head rx_data, tx_data;
 	struct notifier_block nvec_status_notifier;
 	struct work_struct rx_work, tx_work;
-	struct workqueue_struct *wq;
 	struct nvec_msg msg_pool[NVEC_POOL_SIZE];
 	struct nvec_msg *rx;
 

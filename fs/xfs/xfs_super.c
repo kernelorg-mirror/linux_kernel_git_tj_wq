@@ -1531,7 +1531,7 @@ xfs_init_workqueues(void)
 	 * competing for ressources.  Use the default large max_active value
 	 * so that even lots of filesystems can perform these task in parallel.
 	 */
-	xfs_syncd_wq = alloc_workqueue("xfssyncd", WQ_NON_REENTRANT, 0);
+	xfs_syncd_wq = alloc_workqueue("xfssyncd", 0, 0);
 	if (!xfs_syncd_wq)
 		return -ENOMEM;
 
