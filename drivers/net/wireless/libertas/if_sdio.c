@@ -1074,6 +1074,8 @@ static struct mmc_host *reset_host;
 
 static void if_sdio_reset_card_worker(struct work_struct *work)
 {
+	struct mmc_host *target = reset_host;
+
 	/*
 	 * The actual reset operation must be run outside of lbs_thread. This
 	 * is because mmc_remove_host() will cause the device to be instantly
@@ -1085,17 +1087,14 @@ static void if_sdio_reset_card_worker(struct work_struct *work)
 	 */
 
 	pr_info("Resetting card...");
-	mmc_remove_host(reset_host);
-	mmc_add_host(reset_host);
+	mmc_remove_host(target);
+	mmc_add_host(target);
 }
 static DECLARE_WORK(card_reset_work, if_sdio_reset_card_worker);
 
 static void if_sdio_reset_card(struct lbs_private *priv)
 {
 	struct if_sdio_card *card = priv->card;
-
-	if (work_pending(&card_reset_work))
-		return;
 
 	reset_host = card->func->card->host;
 	schedule_work(&card_reset_work);

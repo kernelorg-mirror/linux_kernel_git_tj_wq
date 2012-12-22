@@ -814,7 +814,7 @@ static int lbs_cfg_scan(struct wiphy *wiphy,
 
 	lbs_deb_enter(LBS_DEB_CFG80211);
 
-	if (priv->scan_req || delayed_work_pending(&priv->scan_work)) {
+	if (priv->scan_req) {
 		/* old scan request not yet processed */
 		ret = -EAGAIN;
 		goto out;
