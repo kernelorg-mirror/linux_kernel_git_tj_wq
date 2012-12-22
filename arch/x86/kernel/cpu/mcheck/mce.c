@@ -514,8 +514,7 @@ static void mce_schedule_work(void)
 {
 	if (!mce_ring_empty()) {
 		struct work_struct *work = &__get_cpu_var(mce_work);
-		if (!work_pending(work))
-			schedule_work(work);
+		schedule_work(work);
 	}
 }
 
@@ -1351,12 +1350,7 @@ int mce_notify_irq(void)
 		/* wake processes polling /dev/mcelog */
 		wake_up_interruptible(&mce_chrdev_wait);
 
-		/*
-		 * There is no risk of missing notifications because
-		 * work_pending is always cleared before the function is
-		 * executed.
-		 */
-		if (mce_helper[0] && !work_pending(&mce_trigger_work))
+		if (mce_helper[0])
 			schedule_work(&mce_trigger_work);
 
 		if (__ratelimit(&ratelimit))
