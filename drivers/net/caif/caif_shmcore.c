@@ -183,9 +183,7 @@ int caif_shmdrv_rx_cb(u32 mbx_msg, void *priv)
 		spin_unlock_irqrestore(&pshm_drv->lock, flags);
 
 		/* Schedule RX work queue. */
-		if (!work_pending(&pshm_drv->shm_rx_work))
-			queue_work(pshm_drv->pshm_rx_workqueue,
-						&pshm_drv->shm_rx_work);
+		queue_work(pshm_drv->pshm_rx_workqueue, &pshm_drv->shm_rx_work);
 	}
 
 	/* Check for emptied buffers. */
@@ -246,9 +244,8 @@ int caif_shmdrv_rx_cb(u32 mbx_msg, void *priv)
 
 
 			/* Schedule the work queue. if required */
-			if (!work_pending(&pshm_drv->shm_tx_work))
-				queue_work(pshm_drv->pshm_tx_workqueue,
-							&pshm_drv->shm_tx_work);
+			queue_work(pshm_drv->pshm_tx_workqueue,
+				   &pshm_drv->shm_tx_work);
 		} else
 			spin_unlock_irqrestore(&pshm_drv->lock, flags);
 	}
@@ -374,8 +371,7 @@ static void shm_rx_work_func(struct work_struct *rx_work)
 	}
 
 	/* Schedule the work queue. if required */
-	if (!work_pending(&pshm_drv->shm_tx_work))
-		queue_work(pshm_drv->pshm_tx_workqueue, &pshm_drv->shm_tx_work);
+	queue_work(pshm_drv->pshm_tx_workqueue, &pshm_drv->shm_tx_work);
 
 }
 
@@ -528,8 +524,7 @@ static int shm_netdev_tx(struct sk_buff *skb, struct net_device *shm_netdev)
 	skb_queue_tail(&pshm_drv->sk_qhead, skb);
 
 	/* Schedule Tx work queue. for deferred processing of skbs*/
-	if (!work_pending(&pshm_drv->shm_tx_work))
-		queue_work(pshm_drv->pshm_tx_workqueue, &pshm_drv->shm_tx_work);
+	queue_work(pshm_drv->pshm_tx_workqueue, &pshm_drv->shm_tx_work);
 
 	return 0;
 }
