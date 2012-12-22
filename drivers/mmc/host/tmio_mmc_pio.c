@@ -573,8 +573,7 @@ static bool __tmio_mmc_card_detect_irq(struct tmio_mmc_host *host,
 		tmio_mmc_ack_mmc_irqs(host, TMIO_STAT_CARD_INSERT |
 			TMIO_STAT_CARD_REMOVE);
 		if ((((ireg & TMIO_STAT_CARD_REMOVE) && mmc->card) ||
-		     ((ireg & TMIO_STAT_CARD_INSERT) && !mmc->card)) &&
-		    !work_pending(&mmc->detect.work))
+		     ((ireg & TMIO_STAT_CARD_INSERT) && !mmc->card)))
 			mmc_detect_change(host->mmc, msecs_to_jiffies(100));
 		return true;
 	}
