@@ -718,17 +718,25 @@ static inline void l2cap_chan_unlock(struct l2cap_chan *chan)
 }
 
 static inline void l2cap_set_timer(struct l2cap_chan *chan,
-				   struct delayed_work *work, long timeout)
+				   struct delayed_work *work, long timeout,
+				   bool override)
 {
+	bool was_pending;
+
 	BT_DBG("chan %p state %s timeout %ld", chan,
 	       state_to_string(chan->state), timeout);
 
-	/* If delayed work cancelled do not hold(chan)
-	   since it is already done with previous set_timer */
-	if (!cancel_delayed_work(work))
-		l2cap_chan_hold(chan);
+	/* @work should hold a reference to @chan */
+	l2cap_chan_hold(chan);
 
-	schedule_delayed_work(work, timeout);
+	if (override)
+		was_pending = mod_delayed_work(system_wq, work, timeout);
+	else
+		was_pending = !schedule_delayed_work(work, timeout);
+
+	/* if @work was already pending, lose the extra ref */
+	if (was_pending)
+		l2cap_chan_put(chan);
 }
 
 static inline bool l2cap_clear_timer(struct l2cap_chan *chan,
@@ -745,12 +753,12 @@ static inline bool l2cap_clear_timer(struct l2cap_chan *chan,
 	return ret;
 }
 
-#define __set_chan_timer(c, t) l2cap_set_timer(c, &c->chan_timer, (t))
+#define __set_chan_timer(c, t) l2cap_set_timer(c, &c->chan_timer, (t), true)
 #define __clear_chan_timer(c) l2cap_clear_timer(c, &c->chan_timer)
 #define __clear_retrans_timer(c) l2cap_clear_timer(c, &c->retrans_timer)
 #define __clear_monitor_timer(c) l2cap_clear_timer(c, &c->monitor_timer)
 #define __set_ack_timer(c) l2cap_set_timer(c, &chan->ack_timer, \
-		msecs_to_jiffies(L2CAP_DEFAULT_ACK_TO));
+		msecs_to_jiffies(L2CAP_DEFAULT_ACK_TO), true);
 #define __clear_ack_timer(c) l2cap_clear_timer(c, &c->ack_timer)
 
 static inline int __seq_offset(struct l2cap_chan *chan, __u16 seq1, __u16 seq2)
