@@ -363,10 +363,8 @@ static irqreturn_t wm97xx_pen_interrupt(int irq, void *dev_id)
 {
 	struct wm97xx *wm = dev_id;
 
-	if (!work_pending(&wm->pen_event_work)) {
+	if (queue_work(wm->ts_workq, &wm->pen_event_work))
 		wm->mach_ops->irq_enable(wm, 0);
-		queue_work(wm->ts_workq, &wm->pen_event_work);
-	}
 
 	return IRQ_HANDLED;
 }
