@@ -44,6 +44,7 @@
 #include <linux/jhash.h>
 #include <linux/hashtable.h>
 #include <linux/rculist.h>
+#include <linux/nodemask.h>
 
 #include "workqueue_internal.h"
 
@@ -255,6 +256,11 @@ struct workqueue_struct {
 };
 
 static struct kmem_cache *pwq_cache;
+
+static int wq_numa_tbl_len;		/* highest possible NUMA node id + 1 */
+static cpumask_var_t *wq_numa_possible_cpumask;
+					/* possible CPUs of each node, may
+					   be NULL if init failed */
 
 static DEFINE_MUTEX(wq_mutex);		/* protects workqueues and pools */
 static DEFINE_SPINLOCK(pwq_lock);	/* protects pool_workqueues */
@@ -4417,7 +4423,7 @@ out_unlock:
 static int __init init_workqueues(void)
 {
 	int std_nice[NR_STD_WORKER_POOLS] = { 0, HIGHPRI_NICE_LEVEL };
-	int i, cpu;
+	int i, node, cpu;
 
 	/* make sure we have enough bits for OFFQ pool ID */
 	BUILD_BUG_ON((1LU << (BITS_PER_LONG - WORK_OFFQ_POOL_SHIFT)) <
@@ -4429,6 +4435,33 @@ static int __init init_workqueues(void)
 
 	cpu_notifier(workqueue_cpu_up_callback, CPU_PRI_WORKQUEUE_UP);
 	hotcpu_notifier(workqueue_cpu_down_callback, CPU_PRI_WORKQUEUE_DOWN);
+
+	/* determine NUMA pwq table len - highest node id + 1 */
+	for_each_node(node)
+		wq_numa_tbl_len = max(wq_numa_tbl_len, node + 1);
+
+	/*
+	 * We want masks of possible CPUs of each node which isn't readily
+	 * available.  Build one from cpu_to_node() which should have been
+	 * fully initialized by now.
+	 */
+	wq_numa_possible_cpumask = kzalloc(wq_numa_tbl_len *
+					   sizeof(wq_numa_possible_cpumask[0]),
+					   GFP_KERNEL);
+	BUG_ON(!wq_numa_possible_cpumask);
+
+	for_each_node(node)
+		BUG_ON(!alloc_cpumask_var_node(&wq_numa_possible_cpumask[node],
+					       GFP_KERNEL, node));
+	for_each_possible_cpu(cpu) {
+		node = cpu_to_node(cpu);
+		if (WARN_ON(node == NUMA_NO_NODE)) {
+			pr_err("workqueue: NUMA node mapping not available for cpu%d, disabling NUMA support\n", cpu);
+			wq_numa_possible_cpumask = NULL;
+			break;
+		}
+		cpumask_set_cpu(cpu, wq_numa_possible_cpumask[node]);
+	}
 
 	/* initialize CPU pools */
 	for_each_possible_cpu(cpu) {
