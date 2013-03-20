@@ -247,6 +247,8 @@ struct workqueue_struct {
 	int			nr_drainers;	/* WQ: drain in progress */
 	int			saved_max_active; /* PW: saved pwq max_active */
 
+	struct workqueue_attrs	*unbound_attrs;	/* WQ: only for unbound wqs */
+
 #ifdef CONFIG_SYSFS
 	struct wq_device	*wq_dev;	/* I: for sysfs interface */
 #endif
@@ -3098,10 +3100,9 @@ static ssize_t wq_nice_show(struct device *dev, struct device_attribute *attr,
 	struct workqueue_struct *wq = dev_to_wq(dev);
 	int written;
 
-	rcu_read_lock_sched();
-	written = scnprintf(buf, PAGE_SIZE, "%d\n",
-			    first_pwq(wq)->pool->attrs->nice);
-	rcu_read_unlock_sched();
+	mutex_lock(&wq_mutex);
+	written = scnprintf(buf, PAGE_SIZE, "%d\n", wq->unbound_attrs->nice);
+	mutex_unlock(&wq_mutex);
 
 	return written;
 }
@@ -3115,9 +3116,9 @@ static struct workqueue_attrs *wq_sysfs_prep_attrs(struct workqueue_struct *wq)
 	if (!attrs)
 		return NULL;
 
-	rcu_read_lock_sched();
-	copy_workqueue_attrs(attrs, first_pwq(wq)->pool->attrs);
-	rcu_read_unlock_sched();
+	mutex_lock(&wq_mutex);
+	copy_workqueue_attrs(attrs, wq->unbound_attrs);
+	mutex_unlock(&wq_mutex);
 	return attrs;
 }
 
@@ -3148,10 +3149,9 @@ static ssize_t wq_cpumask_show(struct device *dev,
 	struct workqueue_struct *wq = dev_to_wq(dev);
 	int written;
 
-	rcu_read_lock_sched();
-	written = cpumask_scnprintf(buf, PAGE_SIZE,
-				    first_pwq(wq)->pool->attrs->cpumask);
-	rcu_read_unlock_sched();
+	mutex_lock(&wq_mutex);
+	written = cpumask_scnprintf(buf, PAGE_SIZE, wq->unbound_attrs->cpumask);
+	mutex_unlock(&wq_mutex);
 
 	written += scnprintf(buf + written, PAGE_SIZE - written, "\n");
 	return written;
@@ -3587,8 +3587,10 @@ static void pwq_unbound_release_workfn(struct work_struct *work)
 	 * If we're the last pwq going away, @wq is already dead and no one
 	 * is gonna access it anymore.  Free it.
 	 */
-	if (list_empty(&wq->pwqs))
+	if (list_empty(&wq->pwqs)) {
+		free_workqueue_attrs(wq->unbound_attrs);
 		kfree(wq);
+	}
 }
 
 /**
@@ -3663,6 +3665,9 @@ static void init_and_link_pwq(struct pool_workqueue *pwq,
 
 	/* link in @pwq */
 	list_add_rcu(&pwq->pwqs_node, &wq->pwqs);
+
+	if (wq->flags & WQ_UNBOUND)
+		copy_workqueue_attrs(wq->unbound_attrs, pool->attrs);
 
 	spin_unlock_irq(&pwq_lock);
 	mutex_unlock(&wq->flush_mutex);
@@ -3772,6 +3777,12 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	if (!wq)
 		return NULL;
 
+	if (flags & WQ_UNBOUND) {
+		wq->unbound_attrs = alloc_workqueue_attrs(GFP_KERNEL);
+		if (!wq->unbound_attrs)
+			goto err_free_wq;
+	}
+
 	vsnprintf(wq->name, namelen, fmt, args1);
 	va_end(args);
 	va_end(args1);
@@ -3840,6 +3851,7 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	return wq;
 
 err_free_wq:
+	free_workqueue_attrs(wq->unbound_attrs);
 	kfree(wq);
 	return NULL;
 err_destroy:
