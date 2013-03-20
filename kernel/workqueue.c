@@ -45,6 +45,7 @@
 #include <linux/hashtable.h>
 #include <linux/rculist.h>
 #include <linux/nodemask.h>
+#include <linux/moduleparam.h>
 
 #include "workqueue_internal.h"
 
@@ -300,6 +301,9 @@ EXPORT_SYMBOL_GPL(system_unbound_wq);
 struct workqueue_struct *system_freezable_wq __read_mostly;
 EXPORT_SYMBOL_GPL(system_freezable_wq);
 
+static bool wq_disable_numa;
+module_param_named(disable_numa, wq_disable_numa, bool, 0444);
+
 static int worker_thread(void *__worker);
 static void copy_workqueue_attrs(struct workqueue_attrs *to,
 				 const struct workqueue_attrs *from);
@@ -512,21 +516,6 @@ static int worker_pool_assign_id(struct worker_pool *pool)
 	} while (ret == -EAGAIN);
 
 	return ret;
-}
-
-/**
- * first_pwq - return the first pool_workqueue of the specified workqueue
- * @wq: the target workqueue
- *
- * This must be called either with pwq_lock held or sched RCU read locked.
- * If the pwq needs to be used beyond the locking in effect, the caller is
- * responsible for guaranteeing that the pwq stays online.
- */
-static struct pool_workqueue *first_pwq(struct workqueue_struct *wq)
-{
-	assert_rcu_or_pwq_lock();
-	return list_first_or_null_rcu(&wq->pwqs, struct pool_workqueue,
-				      pwqs_node);
 }
 
 /**
@@ -3100,16 +3089,21 @@ static struct device_attribute wq_sysfs_attrs[] = {
 	__ATTR_NULL,
 };
 
-static ssize_t wq_pool_id_show(struct device *dev,
-			       struct device_attribute *attr, char *buf)
+static ssize_t wq_pool_ids_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
 	struct workqueue_struct *wq = dev_to_wq(dev);
-	struct worker_pool *pool;
-	int written;
+	const char *delim = "";
+	int node, written = 0;
 
 	rcu_read_lock_sched();
-	pool = first_pwq(wq)->pool;
-	written = scnprintf(buf, PAGE_SIZE, "%d\n", pool->id);
+	for_each_node(node) {
+		written += scnprintf(buf + written, PAGE_SIZE - written,
+				     "%s%d:%d", delim, node,
+				     unbound_pwq_by_node(wq, node)->pool->id);
+		delim = " ";
+	}
+	written += scnprintf(buf + written, PAGE_SIZE - written, "\n");
 	rcu_read_unlock_sched();
 
 	return written;
@@ -3198,10 +3192,52 @@ static ssize_t wq_cpumask_store(struct device *dev,
 	return ret ?: count;
 }
 
+static ssize_t wq_numa_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	struct workqueue_struct *wq = dev_to_wq(dev);
+	int written;
+
+	mutex_lock(&wq_mutex);
+	written = scnprintf(buf, PAGE_SIZE, "%d\n",
+			    !wq->unbound_attrs->no_numa &&
+			    wq_numa_possible_cpumask);
+	mutex_unlock(&wq_mutex);
+
+	return written;
+}
+
+static ssize_t wq_numa_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct workqueue_struct *wq = dev_to_wq(dev);
+	struct workqueue_attrs *attrs;
+	int v, ret;
+
+	attrs = wq_sysfs_prep_attrs(wq);
+	if (!attrs)
+		return -ENOMEM;
+
+	ret = -EINVAL;
+	if (sscanf(buf, "%d", &v) == 1) {
+		if (!v || wq_numa_possible_cpumask) {
+			attrs->no_numa = !v;
+			ret = apply_workqueue_attrs(wq, attrs);
+		} else {
+			printk_ratelimited(KERN_WARNING "workqueue: can't enable NUMA affinity for \"%s\", disabled system-wide\n",
+					   wq->name);
+		}
+	}
+
+	free_workqueue_attrs(attrs);
+	return ret ?: count;
+}
+
 static struct device_attribute wq_sysfs_unbound_attrs[] = {
-	__ATTR(pool_id, 0444, wq_pool_id_show, NULL),
+	__ATTR(pool_ids, 0444, wq_pool_ids_show, NULL),
 	__ATTR(nice, 0644, wq_nice_show, wq_nice_store),
 	__ATTR(cpumask, 0644, wq_cpumask_show, wq_cpumask_store),
+	__ATTR(numa, 0644, wq_numa_show, wq_numa_store),
 	__ATTR_NULL,
 };
 
@@ -3742,6 +3778,7 @@ int apply_workqueue_attrs(struct workqueue_struct *wq,
 {
 	struct pool_workqueue **pwq_tbl = NULL, *dfl_pwq = NULL;
 	struct workqueue_attrs *tmp_attrs = NULL;
+	bool do_numa = !attrs->no_numa && wq_numa_possible_cpumask;
 	int node;
 
 	/* only unbound workqueues can change attributes */
@@ -3757,7 +3794,15 @@ int apply_workqueue_attrs(struct workqueue_struct *wq,
 	if (!pwq_tbl || !tmp_attrs)
 		goto enomem;
 
+	/*
+	 * We'll be creating multiple pwqs with differing cpumasks.  Make a
+	 * copy of @attrs which will be modified and used to obtain pools.
+	 * no_numa attribute is special in that it isn't a part of pool
+	 * attributes but modifies how pools are selected in this function.
+	 * Let's not leak no_numa to pool handling functions.
+	 */
 	copy_workqueue_attrs(tmp_attrs, attrs);
+	tmp_attrs->no_numa = false;
 
 	/*
 	 * We want NUMA affinity.  For each node with intersecting possible
@@ -3772,7 +3817,7 @@ int apply_workqueue_attrs(struct workqueue_struct *wq,
 		 * Just fall through if NUMA affinity isn't enabled.  We'll
 		 * end up using the default pwq which is what we want.
 		 */
-		if (wq_numa_possible_cpumask) {
+		if (do_numa) {
 			cpumask_and(cpumask, wq_numa_possible_cpumask[node],
 				    attrs->cpumask);
 			if (cpumask_empty(cpumask))
@@ -4600,22 +4645,28 @@ static int __init init_workqueues(void)
 	 * available.  Build one from cpu_to_node() which should have been
 	 * fully initialized by now.
 	 */
-	wq_numa_possible_cpumask = kzalloc(wq_numa_tbl_len *
-					   sizeof(wq_numa_possible_cpumask[0]),
-					   GFP_KERNEL);
-	BUG_ON(!wq_numa_possible_cpumask);
+	if (!wq_disable_numa) {
+		static cpumask_var_t *tbl;
 
-	for_each_node(node)
-		BUG_ON(!alloc_cpumask_var_node(&wq_numa_possible_cpumask[node],
-					       GFP_KERNEL, node));
-	for_each_possible_cpu(cpu) {
-		node = cpu_to_node(cpu);
-		if (WARN_ON(node == NUMA_NO_NODE)) {
-			pr_err("workqueue: NUMA node mapping not available for cpu%d, disabling NUMA support\n", cpu);
-			wq_numa_possible_cpumask = NULL;
-			break;
+		tbl = kzalloc(wq_numa_tbl_len * sizeof(tbl[0]), GFP_KERNEL);
+		BUG_ON(!tbl);
+
+		for_each_node(node)
+			BUG_ON(!alloc_cpumask_var_node(&tbl[node], GFP_KERNEL,
+						       node));
+		for_each_possible_cpu(cpu) {
+			node = cpu_to_node(cpu);
+			if (WARN_ON(node == NUMA_NO_NODE)) {
+				pr_warn("workqueue: NUMA node mapping not available for cpu%d, disabling NUMA support\n", cpu);
+				tbl = NULL;
+				break;
+			}
+			cpumask_set_cpu(cpu, tbl[node]);
 		}
-		cpumask_set_cpu(cpu, wq_numa_possible_cpumask[node]);
+
+		wq_numa_possible_cpumask = tbl;
+	} else {
+		pr_info("workqueue: NUMA affinity support disabled\n");
 	}
 
 	/* initialize CPU pools */
