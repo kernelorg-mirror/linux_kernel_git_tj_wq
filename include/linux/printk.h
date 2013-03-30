@@ -181,6 +181,8 @@ extern void dump_stack_set_arch_desc(const char *fmt, ...);
 extern void dump_stack_print_info(const char *log_lvl);
 extern void dump_stack(void) __cold;
 
+extern void show_regs_print_info(const char *log_lvl);
+
 #ifndef pr_fmt
 #define pr_fmt(fmt) fmt
 #endif
