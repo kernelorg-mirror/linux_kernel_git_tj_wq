@@ -177,6 +177,7 @@ static inline void setup_log_buf(int early)
 }
 #endif
 
+extern void dump_stack_print_info(const char *log_lvl);
 extern void dump_stack(void) __cold;
 
 #ifndef pr_fmt
