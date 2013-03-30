@@ -57,3 +57,19 @@ void dump_stack(void)
 	show_stack(NULL, NULL);
 }
 EXPORT_SYMBOL(dump_stack);
+
+/**
+ * show_regs_print_info - print generic debug info for show_regs()
+ * @log_lvl: log level
+ *
+ * show_regs() implementations can use this function to print out generic
+ * debug information.
+ */
+void show_regs_print_info(const char *log_lvl)
+{
+	dump_stack_print_info(log_lvl);
+
+	printk("%sCPU:%d task: %p ti: %p task.ti: %p\n",
+	       log_lvl, raw_smp_processor_id(), current, current_thread_info(),
+	       task_thread_info(current));
+}
