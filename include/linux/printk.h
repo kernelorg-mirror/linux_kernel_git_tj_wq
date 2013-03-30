@@ -134,6 +134,8 @@ extern int printk_delay_msec;
 extern int dmesg_restrict;
 extern int kptr_restrict;
 
+extern void wake_up_klogd(void);
+
 void log_buf_kexec_setup(void);
 void __init setup_log_buf(int early);
 #else
@@ -162,6 +164,10 @@ static inline bool printk_timed_ratelimit(unsigned long *caller_jiffies,
 	return false;
 }
 
+static inline void wake_up_klogd(void)
+{
+}
+
 static inline void log_buf_kexec_setup(void)
 {
 }
@@ -171,7 +177,11 @@ static inline void setup_log_buf(int early)
 }
 #endif
 
+extern void dump_stack_set_arch_desc(const char *fmt, ...);
+extern void dump_stack_print_info(const char *log_lvl);
 extern void dump_stack(void) __cold;
+
+extern void show_regs_print_info(const char *log_lvl);
 
 #ifndef pr_fmt
 #define pr_fmt(fmt) fmt
