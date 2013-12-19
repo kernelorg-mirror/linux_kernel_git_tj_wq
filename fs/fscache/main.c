@@ -62,9 +62,13 @@ static int fscache_max_active_sysctl(struct ctl_table *table, int write,
 	int ret;
 
 	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	if (ret == 0)
-		workqueue_set_max_active(*wqp, *datap);
-	return ret;
+	if (ret < 0)
+		return ret;
+	if (*datap < 1)
+		return -EINVAL;
+
+	workqueue_set_max_active(*wqp, *datap);
+	return 0;
 }
 
 ctl_table fscache_sysctls[] = {

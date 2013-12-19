@@ -4136,6 +4136,11 @@ static int wq_clamp_max_active(int max_active, unsigned int flags,
 {
 	int lim = flags & WQ_UNBOUND ? WQ_UNBOUND_MAX_ACTIVE : WQ_MAX_ACTIVE;
 
+	if (max_active == 0)
+		return WQ_DFL_ACTIVE;
+	if (max_active == WQ_FROZEN_ACTIVE)
+		return 0;
+
 	if (max_active < 1 || max_active > lim)
 		pr_warn("workqueue: max_active %d requested for %s is out of range, clamping between %d and %d\n",
 			max_active, name, 1, lim);
@@ -4176,7 +4181,6 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	vsnprintf(wq->name, sizeof(wq->name), fmt, args);
 	va_end(args);
 
-	max_active = max_active ?: WQ_DFL_ACTIVE;
 	max_active = wq_clamp_max_active(max_active, flags, wq->name);
 
 	/* init wq */
