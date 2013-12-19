@@ -293,6 +293,12 @@ static DEFINE_SPINLOCK(wq_mayday_lock);	/* protects wq->maydays list */
 static LIST_HEAD(workqueues);		/* PL: list of all workqueues */
 static bool workqueue_freezing;		/* PL: have wqs started freezing? */
 
+/*
+ * Wait for nr_active to drain after max_active adjustment.  This is a cold
+ * path and not expected to have many users.  A global waitq should do.
+ */
+static DECLARE_WAIT_QUEUE_HEAD(wq_nr_active_drain_waitq);
+
 /* the per-cpu worker pools */
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct worker_pool [NR_STD_WORKER_POOLS],
 				     cpu_worker_pools);
@@ -1123,6 +1129,14 @@ static void pwq_dec_nr_in_flight(struct pool_workqueue *pwq, int color)
 	pwq->nr_in_flight[color]--;
 
 	pwq->nr_active--;
+
+	/*
+	 * This can happen only after max_active is lowered.  Tell the
+	 * waiters that draining might be complete.
+	 */
+	if (unlikely(pwq->nr_active == pwq->max_active))
+		wake_up_all(&wq_nr_active_drain_waitq);
+
 	if (!list_empty(&pwq->delayed_works)) {
 		/* one down, submit a delayed one */
 		if (pwq->nr_active < pwq->max_active)
@@ -3140,7 +3154,7 @@ static ssize_t max_active_store(struct device *dev,
 	if (sscanf(buf, "%d", &val) != 1 || val <= 0)
 		return -EINVAL;
 
-	workqueue_set_max_active(wq, val);
+	workqueue_set_max_active(wq, val, false);
 	return count;
 }
 static DEVICE_ATTR_RW(max_active);
@@ -4339,15 +4353,21 @@ EXPORT_SYMBOL_GPL(destroy_workqueue);
  * workqueue_set_max_active - adjust max_active of a workqueue
  * @wq: target workqueue
  * @max_active: new max_active value.
+ * @drain: wait until the actual level of concurrency becomes <= @max_active
  *
- * Set max_active of @wq to @max_active.
+ * Set max_active of @wq to @max_active.  If @drain is true, wait until the
+ * in-flight work items are drained to the new level.
  *
  * CONTEXT:
  * Don't call from IRQ context.
  */
-void workqueue_set_max_active(struct workqueue_struct *wq, int max_active)
+void workqueue_set_max_active(struct workqueue_struct *wq, int max_active,
+			      bool drain)
 {
+	DEFINE_WAIT(wait);
 	struct pool_workqueue *pwq;
+
+	might_sleep_if(drain);
 
 	/* disallow meddling with max_active for ordered workqueues */
 	if (WARN_ON(wq->flags & __WQ_ORDERED))
@@ -4362,6 +4382,38 @@ void workqueue_set_max_active(struct workqueue_struct *wq, int max_active)
 	for_each_pwq(pwq, wq)
 		pwq_adjust_max_active(pwq);
 
+	mutex_unlock(&wq->mutex);
+
+	/*
+	 * If we have increased max_active, pwq_dec_nr_in_flight() might
+	 * not trigger for other instances of this function waiting for
+	 * drain.  Force them to check.
+	 */
+	wake_up_all(&wq_nr_active_drain_waitq);
+
+	if (!drain)
+		return;
+
+	/* let's wait for the drain to complete */
+restart:
+	mutex_lock(&wq->mutex);
+	prepare_to_wait(&wq_nr_active_drain_waitq, &wait, TASK_UNINTERRUPTIBLE);
+
+	for_each_pwq(pwq, wq) {
+		/*
+		 * nr_active should be monotonously decreasing as long as
+		 * it's over max_active, so no need to grab pool lock.
+		 * Also, test against saved_max_active in case multiple
+		 * instances and/or system freezer are racing.
+		 */
+		if (pwq->nr_active > wq->saved_max_active) {
+			mutex_unlock(&wq->mutex);
+			schedule();
+			goto restart;
+		}
+	}
+
+	finish_wait(&wq_nr_active_drain_waitq, &wait);
 	mutex_unlock(&wq->mutex);
 }
 EXPORT_SYMBOL_GPL(workqueue_set_max_active);

@@ -67,7 +67,7 @@ static int fscache_max_active_sysctl(struct ctl_table *table, int write,
 	if (*datap < 1)
 		return -EINVAL;
 
-	workqueue_set_max_active(*wqp, *datap);
+	workqueue_set_max_active(*wqp, *datap, false);
 	return 0;
 }
 
