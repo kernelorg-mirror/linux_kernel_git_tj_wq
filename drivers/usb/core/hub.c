@@ -1040,7 +1040,7 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 		 */
 		if (type == HUB_INIT) {
 			delay = hub_power_on(hub, false);
-			PREPARE_DELAYED_WORK(&hub->init_work, hub_init_func2);
+			hub->init_workfn = hub_init_func2;
 			schedule_delayed_work(&hub->init_work,
 					msecs_to_jiffies(delay));
 
@@ -1194,7 +1194,7 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 
 		/* Don't do a long sleep inside a workqueue routine */
 		if (type == HUB_INIT2) {
-			PREPARE_DELAYED_WORK(&hub->init_work, hub_init_func3);
+			hub->init_workfn = hub_init_func3;
 			schedule_delayed_work(&hub->init_work,
 					msecs_to_jiffies(delay));
 			return;		/* Continues at init3: below */
@@ -1634,6 +1634,13 @@ static void hub_disconnect(struct usb_interface *intf)
 	kref_put(&hub->kref, hub_release);
 }
 
+static void hub_init_workfn(struct work_struct *work)
+{
+	struct usb_hub *hub = container_of(to_delayed_work(work),
+					   struct usb_hub, init_work);
+	hub->init_workfn(work);
+}
+
 static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	struct usb_host_interface *desc;
@@ -1728,7 +1735,7 @@ descriptor_error:
 	hub->intfdev = &intf->dev;
 	hub->hdev = hdev;
 	INIT_DELAYED_WORK(&hub->leds, led_work);
-	INIT_DELAYED_WORK(&hub->init_work, NULL);
+	INIT_DELAYED_WORK(&hub->init_work, hub_init_workfn);
 	usb_get_intf(intf);
 
 	usb_set_intfdata (intf, hub);
