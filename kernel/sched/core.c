@@ -3336,11 +3336,17 @@ static void __sched notrace __schedule(bool preempt)
 	unsigned long *switch_count;
 	struct pin_cookie cookie;
 	struct rq *rq;
-	int cpu;
+	int cpu, in_iowait;
 
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
 	prev = rq->curr;
+	in_iowait = prev->in_iowait;
+
+	if (in_iowait) {
+		delayacct_blkio_start();
+		atomic_inc(&rq->nr_iowait);
+	}
 
 	schedule_debug(prev);
 
@@ -3406,6 +3412,11 @@ static void __sched notrace __schedule(bool preempt)
 	}
 
 	balance_callback(rq);
+
+	if (in_iowait) {
+		atomic_dec(&rq->nr_iowait);
+		delayacct_blkio_end();
+	}
 }
 
 void __noreturn do_task_dead(void)
@@ -5063,19 +5074,13 @@ EXPORT_SYMBOL_GPL(yield_to);
 long __sched io_schedule_timeout(long timeout)
 {
 	int old_iowait = current->in_iowait;
-	struct rq *rq;
 	long ret;
 
 	current->in_iowait = 1;
 	blk_schedule_flush_plug(current);
 
-	delayacct_blkio_start();
-	rq = raw_rq();
-	atomic_inc(&rq->nr_iowait);
 	ret = schedule_timeout(timeout);
 	current->in_iowait = old_iowait;
-	atomic_dec(&rq->nr_iowait);
-	delayacct_blkio_end();
 
 	return ret;
 }
