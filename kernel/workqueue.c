@@ -306,6 +306,14 @@ static struct kmem_cache *pwq_cache;
 static cpumask_var_t *wq_numa_possible_cpumask;
 					/* possible CPUs of each node */
 
+/*
+ * Per-cpu work items which run for longer than the following threshold are
+ * automatically considered CPU intensive and excluded from concurrency
+ * management to prevent them from noticeably delaying other per-cpu work items.
+ */
+static unsigned long wq_cpu_intensive_thresh_us = 5000;
+module_param_named(cpu_intensive_thresh_us, wq_cpu_intensive_thresh_us, ulong, 0644);
+
 static bool wq_disable_numa;
 module_param_named(disable_numa, wq_disable_numa, bool, 0444);
 
@@ -951,9 +959,6 @@ void wq_worker_stopping(struct task_struct *task)
 	struct worker *worker = kthread_data(task);
 	struct worker_pool *pool;
 
-	if (task_is_running(task))
-		return;
-
 	/*
 	 * Rescuers, which may not have all the fields set up like normal
 	 * workers, also reach here, let's not access anything before
@@ -964,24 +969,49 @@ void wq_worker_stopping(struct task_struct *task)
 
 	pool = worker->pool;
 
-	/* Return if preempted before wq_worker_running() was reached */
-	if (worker->sleeping)
-		return;
+	if (task_is_running(task)) {
+		/*
+		 * Concurrency-managed @worker is still RUNNING. See if the
+		 * current work is hogging CPU stalling other per-cpu work
+		 * items. If so, mark @worker CPU_INTENSIVE to exclude it from
+		 * concurrency management. @worker->current_* are stable as they
+		 * can only be modified by @task which is %current.
+		 */
+		if (!worker->current_work ||
+		    task->se.sum_exec_runtime - worker->current_at <
+		    wq_cpu_intensive_thresh_us * NSEC_PER_USEC)
+			return;
 
-	worker->sleeping = 1;
-	raw_spin_lock_irq(&pool->lock);
+		raw_spin_lock_irq(&pool->lock);
+		worker_set_flags(worker, WORKER_CPU_INTENSIVE);
+	} else {
+		/*
+		 * Concurrency-managed @worker is sleeping. Decrement the
+		 * associated pool's nr_running accordingly.
+		 */
 
-	/*
-	 * Recheck in case unbind_workers() preempted us. We don't
-	 * want to decrement nr_running after the worker is unbound
-	 * and nr_running has been reset.
-	 */
-	if (worker->flags & WORKER_NOT_RUNNING) {
-		raw_spin_unlock_irq(&pool->lock);
-		return;
+		/* Return if preempted before wq_worker_running() was reached */
+		if (worker->sleeping)
+			return;
+
+		worker->sleeping = 1;
+		raw_spin_lock_irq(&pool->lock);
+
+		/*
+		 * Recheck in case unbind_workers() preempted us. We don't want
+		 * to decrement nr_running after the worker is unbound and
+		 * nr_running has been reset. As a running worker never sleeps
+		 * inbetween work items, we know that @worker->current_* are
+		 * valid after the following check.
+		 */
+		if (worker->flags & WORKER_NOT_RUNNING) {
+			raw_spin_unlock_irq(&pool->lock);
+			return;
+		}
+
+		pool->nr_running--;
 	}
 
-	pool->nr_running--;
 	if (need_more_worker(pool))
 		wake_up_worker(pool);
 	raw_spin_unlock_irq(&pool->lock);
@@ -2288,7 +2318,6 @@ __acquires(&pool->lock)
 {
 	struct pool_workqueue *pwq = get_work_pwq(work);
 	struct worker_pool *pool = worker->pool;
-	bool cpu_intensive = pwq->wq->flags & WQ_CPU_INTENSIVE;
 	unsigned long work_data;
 	struct worker *collision;
 #ifdef CONFIG_LOCKDEP
@@ -2325,6 +2354,7 @@ __acquires(&pool->lock)
 	worker->current_work = work;
 	worker->current_func = work->func;
 	worker->current_pwq = pwq;
+	worker->current_at = worker->task->se.sum_exec_runtime;
 	work_data = *work_data_bits(work);
 	worker->current_color = get_work_color(work_data);
 
@@ -2342,7 +2372,7 @@ __acquires(&pool->lock)
 	 * of concurrency management and the next code block will chain
 	 * execution of the pending work items.
 	 */
-	if (unlikely(cpu_intensive))
+	if (unlikely(pwq->wq->flags & WQ_CPU_INTENSIVE))
 		worker_set_flags(worker, WORKER_CPU_INTENSIVE);
 
 	/*
@@ -2420,9 +2450,12 @@ __acquires(&pool->lock)
 
 	raw_spin_lock_irq(&pool->lock);
 
-	/* clear cpu intensive status */
-	if (unlikely(cpu_intensive))
-		worker_clr_flags(worker, WORKER_CPU_INTENSIVE);
+	/*
+	 * In addition to %WQ_CPU_INTENSIVE, @worker may also have been marked
+	 * CPU intensive by wq_worker_stopping() if @work consumed more than
+	 * wq_cpu_intensive_thresh_us. Clear it.
+	 */
+	worker_clr_flags(worker, WORKER_CPU_INTENSIVE);
 
 	/* tag the worker for identification in schedule() */
 	worker->last_func = worker->current_func;

@@ -31,6 +31,7 @@ struct worker {
 	struct work_struct	*current_work;	/* L: work being processed */
 	work_func_t		current_func;	/* L: current_work's fn */
 	struct pool_workqueue	*current_pwq;	/* L: current_work's pwq */
+	u64			current_at;	/* L: runtime when current_work started */
 	unsigned int		current_color;	/* L: current_work's color */
 	int			sleeping;	/* None */
 
