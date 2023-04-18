@@ -6650,22 +6650,16 @@ void __noreturn do_task_dead(void)
 
 static inline void sched_submit_work(struct task_struct *tsk)
 {
-	unsigned int task_flags;
+	unsigned int task_flags = tsk->flags;
+
+	if (task_flags & PF_WQ_WORKER)
+		wq_worker_stopping(tsk);
 
 	if (task_is_running(tsk))
 		return;
 
-	task_flags = tsk->flags;
-	/*
-	 * If a worker goes to sleep, notify and ask workqueue whether it
-	 * wants to wake up a task to maintain concurrency.
-	 */
-	if (task_flags & (PF_WQ_WORKER | PF_IO_WORKER)) {
-		if (task_flags & PF_WQ_WORKER)
-			wq_worker_sleeping(tsk);
-		else
-			io_wq_worker_sleeping(tsk);
-	}
+	if (task_flags & PF_IO_WORKER)
+		io_wq_worker_sleeping(tsk);
 
 	/*
 	 * spinlock and rwlock must not flush block requests.  This will

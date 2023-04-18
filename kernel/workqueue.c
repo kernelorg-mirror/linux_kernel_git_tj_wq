@@ -886,16 +886,19 @@ void wq_worker_running(struct task_struct *task)
 }
 
 /**
- * wq_worker_sleeping - a worker is going to sleep
- * @task: task going to sleep
+ * wq_worker_stopping - a worker is stopping
+ * @task: task stopping
  *
- * This function is called from schedule() when a busy worker is
- * going to sleep.
+ * This function is called from schedule() when a busy worker is going off the
+ * CPU.
  */
-void wq_worker_sleeping(struct task_struct *task)
+void wq_worker_stopping(struct task_struct *task)
 {
 	struct worker *worker = kthread_data(task);
 	struct worker_pool *pool;
+
+	if (task_is_running(task))
+		return;
 
 	/*
 	 * Rescuers, which may not have all the fields set up like normal
