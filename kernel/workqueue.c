@@ -196,6 +196,22 @@ struct worker_pool {
 };
 
 /*
+ * Per-pool_workqueue statistics. These can be monitored using
+ * tools/workqueue/wq_monitor.py.
+ */
+enum pool_workqueue_stats {
+	PWQ_STAT_STARTED,	/* work items started execution */
+	PWQ_STAT_COMPLETED,	/* work items completed execution */
+	PWQ_STAT_CPU_TIME,	/* total CPU time consumed */
+	PWQ_STAT_CPU_INTENSIVE,	/* wq_cpu_intensive_thresh_us expirations */
+	PWQ_STAT_CM_WAKEUP,	/* concurrency-management worker wakeups */
+	PWQ_STAT_MAYDAY,	/* maydays to rescuer */
+	PWQ_STAT_RESCUED,	/* linked work items executed by rescuer */
+
+	PWQ_NR_STATS,
+};
+
+/*
  * The per-pool workqueue.  While queued, the lower WORK_STRUCT_FLAG_BITS
  * of work_struct->data are used for flags and the remaining high bits
  * point to the pwq; thus, pwqs need to be aligned at two's power of the
@@ -231,6 +247,8 @@ struct pool_workqueue {
 	struct list_head	inactive_works;	/* L: inactive works */
 	struct list_head	pwqs_node;	/* WR: node on wq->pwqs */
 	struct list_head	mayday_node;	/* MD: node on wq->maydays */
+
+	u64			stats[PWQ_NR_STATS];
 
 	/*
 	 * Release of unbound pwq is punted to system_wq.  See put_pwq()
@@ -984,6 +1002,7 @@ void wq_worker_stopping(struct task_struct *task)
 
 		raw_spin_lock_irq(&pool->lock);
 		worker_set_flags(worker, WORKER_CPU_INTENSIVE);
+		worker->current_pwq->stats[PWQ_STAT_CPU_INTENSIVE]++;
 	} else {
 		/*
 		 * Concurrency-managed @worker is sleeping. Decrement the
@@ -1012,8 +1031,10 @@ void wq_worker_stopping(struct task_struct *task)
 		pool->nr_running--;
 	}
 
-	if (need_more_worker(pool))
+	if (need_more_worker(pool)) {
+		worker->current_pwq->stats[PWQ_STAT_CM_WAKEUP]++;
 		wake_up_worker(pool);
+	}
 	raw_spin_unlock_irq(&pool->lock);
 }
 
@@ -2181,6 +2202,7 @@ static void send_mayday(struct work_struct *work)
 		get_pwq(pwq);
 		list_add_tail(&pwq->mayday_node, &wq->maydays);
 		wake_up_process(wq->rescuer->task);
+		pwq->stats[PWQ_STAT_MAYDAY]++;
 	}
 }
 
@@ -2419,6 +2441,7 @@ __acquires(&pool->lock)
 	 * workqueues), so hiding them isn't a problem.
 	 */
 	lockdep_invariant_state(true);
+	pwq->stats[PWQ_STAT_STARTED]++;
 	trace_workqueue_execute_start(work);
 	worker->current_func(work);
 	/*
@@ -2426,6 +2449,9 @@ __acquires(&pool->lock)
 	 * point will only record its address.
 	 */
 	trace_workqueue_execute_end(work, worker->current_func);
+	pwq->stats[PWQ_STAT_COMPLETED]++;
+	pwq->stats[PWQ_STAT_CPU_TIME] +=
+		worker->task->se.sum_exec_runtime - worker->current_at;
 	lock_map_release(&lockdep_map);
 	lock_map_release(&pwq->wq->lockdep_map);
 
@@ -2672,6 +2698,7 @@ repeat:
 				if (first)
 					pool->watchdog_ts = jiffies;
 				move_linked_works(work, scheduled, &n);
+				pwq->stats[PWQ_STAT_RESCUED]++;
 			}
 			first = false;
 		}
