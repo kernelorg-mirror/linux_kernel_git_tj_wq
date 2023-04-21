@@ -755,14 +755,13 @@ static int create_workqueues(struct hfi1_devdata *dd)
 		}
 		if (!ppd->link_wq) {
 			/*
-			 * Make the link workqueue single-threaded to enforce
+			 * Make the link workqueue ordered to enforce
 			 * serialization.
 			 */
 			ppd->link_wq =
-				alloc_workqueue(
+				alloc_ordered_workqueue(
 				    "hfi_link_%d_%d",
-				    WQ_SYSFS | WQ_MEM_RECLAIM | WQ_UNBOUND,
-				    1, /* max_active */
+				    WQ_SYSFS | WQ_MEM_RECLAIM,
 				    dd->unit, pidx);
 			if (!ppd->link_wq)
 				goto wq_error;
