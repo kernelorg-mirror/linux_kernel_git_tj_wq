@@ -6692,24 +6692,20 @@ void __noreturn do_task_dead(void)
 		cpu_relax();
 }
 
-static inline void sched_submit_work(struct task_struct *tsk)
+static inline notrace void sched_submit_work(struct task_struct *tsk,
+					     unsigned int sched_mode)
 {
-	unsigned int task_flags;
+	unsigned int task_flags = tsk->flags;
+	bool voluntary = sched_mode == SM_NONE;
 
-	if (task_is_running(tsk))
+	if (task_flags & PF_WQ_WORKER)
+		wq_worker_stopping(tsk, voluntary);
+
+	if (!voluntary || task_is_running(tsk))
 		return;
 
-	task_flags = tsk->flags;
-	/*
-	 * If a worker goes to sleep, notify and ask workqueue whether it
-	 * wants to wake up a task to maintain concurrency.
-	 */
-	if (task_flags & (PF_WQ_WORKER | PF_IO_WORKER)) {
-		if (task_flags & PF_WQ_WORKER)
-			wq_worker_sleeping(tsk);
-		else
-			io_wq_worker_sleeping(tsk);
-	}
+	if (task_flags & PF_IO_WORKER)
+		io_wq_worker_sleeping(tsk);
 
 	/*
 	 * spinlock and rwlock must not flush block requests.  This will
@@ -6725,8 +6721,12 @@ static inline void sched_submit_work(struct task_struct *tsk)
 	blk_flush_plug(tsk->plug, true);
 }
 
-static void sched_update_worker(struct task_struct *tsk)
+static notrace void sched_update_worker(struct task_struct *tsk,
+					unsigned int sched_mode)
 {
+	if (sched_mode != SM_NONE)
+		return;
+
 	if (tsk->flags & (PF_WQ_WORKER | PF_IO_WORKER)) {
 		if (tsk->flags & PF_WQ_WORKER)
 			wq_worker_running(tsk);
@@ -6739,13 +6739,13 @@ asmlinkage __visible void __sched schedule(void)
 {
 	struct task_struct *tsk = current;
 
-	sched_submit_work(tsk);
+	sched_submit_work(tsk, SM_NONE);
 	do {
 		preempt_disable();
 		__schedule(SM_NONE);
 		sched_preempt_enable_no_resched();
 	} while (need_resched());
-	sched_update_worker(tsk);
+	sched_update_worker(tsk, SM_NONE);
 }
 EXPORT_SYMBOL(schedule);
 
@@ -6808,17 +6808,24 @@ void __sched schedule_preempt_disabled(void)
 #ifdef CONFIG_PREEMPT_RT
 void __sched notrace schedule_rtlock(void)
 {
+	struct task_struct *tsk = current;
+
+	sched_submit_work(tsk, SM_RTLOCK_WAIT);
 	do {
 		preempt_disable();
 		__schedule(SM_RTLOCK_WAIT);
 		sched_preempt_enable_no_resched();
 	} while (need_resched());
+	sched_update_worker(tsk, SM_RTLOCK_WAIT);
 }
 NOKPROBE_SYMBOL(schedule_rtlock);
 #endif
 
 static void __sched notrace preempt_schedule_common(void)
 {
+	struct task_struct *tsk = current;
+
+	sched_submit_work(tsk, SM_PREEMPT);
 	do {
 		/*
 		 * Because the function tracer can trace preempt_count_sub()
@@ -6844,6 +6851,7 @@ static void __sched notrace preempt_schedule_common(void)
 		 * between schedule and now.
 		 */
 	} while (need_resched());
+	sched_update_worker(tsk, SM_PREEMPT);
 }
 
 #ifdef CONFIG_PREEMPTION
@@ -6901,11 +6909,13 @@ EXPORT_SYMBOL(dynamic_preempt_schedule);
  */
 asmlinkage __visible void __sched notrace preempt_schedule_notrace(void)
 {
+	struct task_struct *tsk = current;
 	enum ctx_state prev_ctx;
 
 	if (likely(!preemptible()))
 		return;
 
+	sched_submit_work(tsk, SM_PREEMPT);
 	do {
 		/*
 		 * Because the function tracer can trace preempt_count_sub()
@@ -6934,6 +6944,7 @@ asmlinkage __visible void __sched notrace preempt_schedule_notrace(void)
 		preempt_latency_stop(1);
 		preempt_enable_no_resched_notrace();
 	} while (need_resched());
+	sched_update_worker(tsk, SM_PREEMPT);
 }
 EXPORT_SYMBOL_GPL(preempt_schedule_notrace);
 
@@ -6968,11 +6979,13 @@ EXPORT_SYMBOL(dynamic_preempt_schedule_notrace);
  */
 asmlinkage __visible void __sched preempt_schedule_irq(void)
 {
+	struct task_struct *tsk = current;
 	enum ctx_state prev_state;
 
 	/* Catch callers which need to be fixed */
 	BUG_ON(preempt_count() || !irqs_disabled());
 
+	sched_submit_work(tsk, SM_PREEMPT);
 	prev_state = exception_enter();
 
 	do {
@@ -6984,6 +6997,7 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 	} while (need_resched());
 
 	exception_exit(prev_state);
+	sched_update_worker(tsk, SM_PREEMPT);
 }
 
 int default_wake_function(wait_queue_entry_t *curr, unsigned mode, int wake_flags,

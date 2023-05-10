@@ -867,7 +867,10 @@ static void wake_up_worker(struct worker_pool *pool)
  * wq_worker_running - a worker is running again
  * @task: task waking up
  *
- * This function is called when a worker returns from schedule()
+ * This function is called when a worker returns from schedule().
+ *
+ * Unlike wq_worker_stopping(), this function is only called from schedule() but
+ * not other scheduling paths including preemption and can be traced safely.
  */
 void wq_worker_running(struct task_struct *task)
 {
@@ -890,16 +893,24 @@ void wq_worker_running(struct task_struct *task)
 }
 
 /**
- * wq_worker_sleeping - a worker is going to sleep
- * @task: task going to sleep
+ * wq_worker_stopping - a worker is stopping
+ * @task: task stopping
+ * @voluntary: being called from schedule()
  *
- * This function is called from schedule() when a busy worker is
- * going to sleep.
+ * This function is called from scheduling paths including schedule() and
+ * preemption when a busy worker is going off the CPU.
+ *
+ * As this function may be called from preempt_enable_notrace() and friends when
+ * !@voluntary, it must be notrace and limit reentrancy when @voluntary to avoid
+ * infinite recursions.
  */
-void wq_worker_sleeping(struct task_struct *task)
+void notrace wq_worker_stopping(struct task_struct *task, bool voluntary)
 {
 	struct worker *worker = kthread_data(task);
 	struct worker_pool *pool;
+
+	if (!voluntary || task_is_running(task))
+		return;
 
 	/*
 	 * Rescuers, which may not have all the fields set up like normal
