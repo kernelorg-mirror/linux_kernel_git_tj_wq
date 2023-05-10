@@ -954,6 +954,132 @@ void wq_worker_running(struct task_struct *task)
 	worker->sleeping = 0;
 }
 
+#ifdef CONFIG_WQ_CPU_INTENSIVE_REPORT
+
+/*
+ * Concurrency-managed per-cpu work items that hog CPU for longer than
+ * wq_cpu_intensive_thresh_us trigger the automatic CPU_INTENSIVE mechanism,
+ * which prevents them from stalling other concurrency-managed work items. If a
+ * work function keeps triggering this mechanism, it's likely that the work item
+ * should be using an unbound workqueue instead.
+ *
+ * wq_cpu_intensive_report() tracks work functions which trigger such conditions
+ * and report them so that they can be examined and converted to use unbound
+ * workqueues as appropriate. To avoid flooding the console, each violating work
+ * function is tracked and reported with exponential backoff.
+ */
+#define WCI_MAX_ENTS 128
+
+struct wci_ent {
+	work_func_t		func;
+	atomic64_t		cnt;
+	struct hlist_node	hash_node;
+	struct list_head	report_node;
+};
+
+static struct wci_ent wci_ents[WCI_MAX_ENTS];
+static int wci_nr_ents;
+static DEFINE_RAW_SPINLOCK(wci_lock);
+static DEFINE_HASHTABLE(wci_hash, ilog2(WCI_MAX_ENTS));
+static LIST_HEAD(wci_report_list);
+static struct kthread_worker *wci_report_worker;
+
+static void wci_report_workfn(struct kthread_work *work)
+{
+	struct wci_ent *ent, *n;
+
+	raw_spin_lock_irq(&wci_lock);
+	list_for_each_entry_safe(ent, n, &wci_report_list, report_node) {
+		pr_warn("workqueue: %ps hogged CPU for >%luus %llu times, consider switching to WQ_UNBOUND\n",
+			ent->func, wq_cpu_intensive_thresh_us,
+			atomic64_read(&ent->cnt));
+		list_del_init(&ent->report_node);
+	}
+	raw_spin_unlock_irq(&wci_lock);
+}
+
+static DEFINE_KTHREAD_WORK(wci_report_work, wci_report_workfn);
+
+static struct wci_ent *wci_find_ent(work_func_t func)
+{
+	struct wci_ent *ent;
+
+	hash_for_each_possible_rcu(wci_hash, ent, hash_node,
+				   (unsigned long)func) {
+		if (ent->func == func)
+			return ent;
+	}
+	return NULL;
+}
+
+static void wq_cpu_intensive_report(work_func_t func)
+{
+	struct wci_ent *ent;
+
+restart:
+	ent = wci_find_ent(func);
+	if (ent) {
+		u64 cnt;
+
+		/*
+		 * Start reporting from the fourth time and back off
+		 * exponentially.
+		 */
+		cnt = atomic64_inc_return_relaxed(&ent->cnt);
+		if (cnt < 4 || !is_power_of_2(cnt))
+			return;
+
+		raw_spin_lock(&wci_lock);
+		if (list_empty(&ent->report_node)) {
+			list_add_tail(&ent->report_node, &wci_report_list);
+			if (wci_report_worker)
+				kthread_queue_work(wci_report_worker,
+						   &wci_report_work);
+		}
+		raw_spin_unlock(&wci_lock);
+		return;
+	}
+
+	/*
+	 * @func is a new violation. Allocate a new entry for it. If wcn_ents[]
+	 * is exhausted, something went really wrong and we probably made enough
+	 * noise already.
+	 */
+	if (wci_nr_ents >= WCI_MAX_ENTS)
+		return;
+
+	raw_spin_lock(&wci_lock);
+
+	if (wci_nr_ents >= WCI_MAX_ENTS) {
+		raw_spin_unlock(&wci_lock);
+		return;
+	}
+
+	if (wci_find_ent(func)) {
+		raw_spin_unlock(&wci_lock);
+		goto restart;
+	}
+
+	ent = &wci_ents[wci_nr_ents++];
+	ent->func = func;
+	atomic64_set(&ent->cnt, 1);
+	INIT_LIST_HEAD(&ent->report_node);
+	hash_add_rcu(wci_hash, &ent->hash_node, (unsigned long)func);
+
+	raw_spin_unlock(&wci_lock);
+}
+
+static void __init wq_cpu_intensive_report_init(void)
+{
+	wci_report_worker = kthread_create_worker(0, "wq_cpu_intensive_report");
+	WARN_ON(!wci_report_worker);
+}
+
+#else	/* CONFIG_WQ_CPU_INTENSIVE_REPORT */
+static void wq_cpu_intensive_report(work_func_t func) {}
+static void __init wq_cpu_intensive_report_init(void) {}
+#endif	/* CONFIG_WQ_CPU_INTENSIVE_REPORT */
+
 /**
  * wq_worker_stopping - a worker is stopping
  * @task: task stopping
@@ -1001,6 +1127,7 @@ void notrace wq_worker_stopping(struct task_struct *task, bool voluntary)
 		 */
 		raw_spin_lock_irq(&pool->lock);
 		worker_set_flags(worker, WORKER_CPU_INTENSIVE);
+		wq_cpu_intensive_report(worker->current_func);
 	} else {
 		/*
 		 * Concurrency-managed @worker is sleeping. Decrement the
@@ -6421,6 +6548,7 @@ void __init workqueue_init(void)
 
 	wq_online = true;
 	wq_watchdog_init();
+	wq_cpu_intensive_report_init();
 }
 
 /*
