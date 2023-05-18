@@ -1565,6 +1565,7 @@ static noinline void __init kernel_init_freeable(void)
 	smp_init();
 	sched_init_smp();
 
+	workqueue_init_topology();
 	padata_init();
 	page_alloc_init_late();
 
