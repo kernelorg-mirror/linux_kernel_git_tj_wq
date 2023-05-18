@@ -226,6 +226,7 @@ enum pool_workqueue_stats {
 struct pool_workqueue {
 	struct worker_pool	*pool;		/* I: the associated pool */
 	struct workqueue_struct *wq;		/* I: the owning workqueue */
+	int			cpu;		/* I: the associated CPU */
 	int			work_color;	/* L: current color */
 	int			flush_color;	/* L: flushing color */
 	int			refcnt;		/* L: reference count */
@@ -4131,7 +4132,7 @@ static void pwq_adjust_max_active(struct pool_workqueue *pwq)
 
 /* initialize newly allocated @pwq which is associated with @wq and @pool */
 static void init_pwq(struct pool_workqueue *pwq, struct workqueue_struct *wq,
-		     struct worker_pool *pool)
+		     struct worker_pool *pool, int cpu)
 {
 	BUG_ON((unsigned long)pwq & WORK_STRUCT_FLAG_MASK);
 
@@ -4139,6 +4140,7 @@ static void init_pwq(struct pool_workqueue *pwq, struct workqueue_struct *wq,
 
 	pwq->pool = pool;
 	pwq->wq = wq;
+	pwq->cpu = cpu;
 	pwq->flush_color = -1;
 	pwq->refcnt = 1;
 	INIT_LIST_HEAD(&pwq->inactive_works);
@@ -4169,8 +4171,9 @@ static void link_pwq(struct pool_workqueue *pwq)
 }
 
 /* obtain a pool matching @attr and create a pwq associating the pool and @wq */
-static struct pool_workqueue *alloc_unbound_pwq(struct workqueue_struct *wq,
-					const struct workqueue_attrs *attrs)
+static struct pool_workqueue *
+alloc_unbound_pwq(struct workqueue_struct *wq,
+		  const struct workqueue_attrs *attrs, int cpu)
 {
 	struct worker_pool *pool;
 	struct pool_workqueue *pwq;
@@ -4187,7 +4190,7 @@ static struct pool_workqueue *alloc_unbound_pwq(struct workqueue_struct *wq,
 		return NULL;
 	}
 
-	init_pwq(pwq, wq, pool);
+	init_pwq(pwq, wq, pool, cpu);
 	return pwq;
 }
 
@@ -4313,7 +4316,7 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 	 * the default pwq covering whole @attrs->cpumask.  Always create
 	 * it even if we don't use it immediately.
 	 */
-	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
+	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs, -1);
 	if (!ctx->dfl_pwq)
 		goto out_free;
 
@@ -4323,7 +4326,7 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 			ctx->pwq_tbl[cpu] = ctx->dfl_pwq;
 		} else {
 			wq_calc_pod_cpumask(new_attrs, cpu, -1);
-			ctx->pwq_tbl[cpu] = alloc_unbound_pwq(wq, new_attrs);
+			ctx->pwq_tbl[cpu] = alloc_unbound_pwq(wq, new_attrs, cpu);
 			if (!ctx->pwq_tbl[cpu])
 				goto out_free;
 		}
@@ -4486,7 +4489,7 @@ static void wq_update_pod(struct workqueue_struct *wq, int cpu, bool online)
 		return;
 
 	/* create a new pwq */
-	pwq = alloc_unbound_pwq(wq, target_attrs);
+	pwq = alloc_unbound_pwq(wq, target_attrs, cpu);
 	if (!pwq) {
 		pr_warn("workqueue: allocation failed while updating CPU pod affinity of \"%s\"\n",
 			wq->name);
@@ -4530,7 +4533,7 @@ static int alloc_and_link_pwqs(struct workqueue_struct *wq)
 			if (!*pwq_p)
 				goto enomem;
 
-			init_pwq(*pwq_p, wq, pool);
+			init_pwq(*pwq_p, wq, pool, cpu);
 
 			mutex_lock(&wq->mutex);
 			link_pwq(*pwq_p);
