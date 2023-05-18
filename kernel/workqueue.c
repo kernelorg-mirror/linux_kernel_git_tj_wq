@@ -208,6 +208,7 @@ enum pool_workqueue_stats {
 	PWQ_STAT_STARTED,	/* work items started execution */
 	PWQ_STAT_COMPLETED,	/* work items completed execution */
 	PWQ_STAT_CPU_TIME,	/* total CPU time consumed */
+	PWQ_STAT_CPU_LOCAL,	/* work items started on the issuing CPU */
 	PWQ_STAT_CPU_INTENSIVE,	/* wq_cpu_intensive_thresh_us violations */
 	PWQ_STAT_CM_WAKEUP,	/* concurrency-management worker wakeups */
 	PWQ_STAT_REPATRIATED,	/* unbound workers brought back into scope */
@@ -1087,51 +1088,76 @@ static bool assign_work(struct work_struct *work, struct worker *worker,
 }
 
 /**
- * kick_pool - wake up an idle worker if necessary
+ * kick_pool - wake up workers and optionally assign work items to them
  * @pool: pool to kick
  *
- * @pool may have pending work items. Wake up worker if necessary. Returns
- * whether a worker was woken up.
+ * @pool may have pending work items. Either wake up one idle worker or multiple
+ * with work items pre-assigned. See the in-line comments.
  */
 static bool kick_pool(struct worker_pool *pool)
 {
-	struct worker *worker = first_idle_worker(pool);
-	struct task_struct *p;
+	bool woken_up = false;
+	struct worker *worker;
 
 	lockdep_assert_held(&pool->lock);
 
-	if (!need_more_worker(pool) || !worker)
-		return false;
-
-	p = worker->task;
-
+	while (need_more_worker(pool) && (worker = first_idle_worker(pool))) {
+		struct task_struct *p = worker->task;
 #ifdef CONFIG_SMP
-	/*
-	 * Idle @worker is about to execute @work and waking up provides an
-	 * opportunity to migrate @worker at a lower cost by setting the task's
-	 * wake_cpu field. Let's see if we want to move @worker to improve
-	 * execution locality.
-	 *
-	 * We're waking the worker that went idle the latest and there's some
-	 * chance that @worker is marked idle but hasn't gone off CPU yet. If
-	 * so, setting the wake_cpu won't do anything. As this is a best-effort
-	 * optimization and the race window is narrow, let's leave as-is for
-	 * now. If this becomes pronounced, we can skip over workers which are
-	 * still on cpu when picking an idle worker.
-	 *
-	 * If @pool has non-strict affinity, @worker might have ended up outside
-	 * its affinity scope. Repatriate.
-	 */
-	if (!pool->attrs->affn_strict &&
-	    !cpumask_test_cpu(p->wake_cpu, pool->attrs->__pod_cpumask)) {
 		struct work_struct *work = list_first_entry(&pool->worklist,
 						struct work_struct, entry);
-		p->wake_cpu = cpumask_any_distribute(pool->attrs->__pod_cpumask);
-		get_work_pwq(work)->stats[PWQ_STAT_REPATRIATED]++;
-	}
+		struct pool_workqueue *pwq = get_work_pwq(work);
+		struct workqueue_struct *wq = pwq->wq;
+
+		/*
+		 * Idle @worker is about to execute @work and waking up provides
+		 * an opportunity to migrate @worker at a lower cost by setting
+		 * the task's wake_cpu field. Let's see if we want to move
+		 * @worker to improve execution locality.
+		 *
+		 * We're waking the worker that went idle the latest and there's
+		 * some chance that @worker is marked idle but hasn't gone off
+		 * CPU yet. If so, setting the wake_cpu won't do anything. As
+		 * this is a best-effort optimization and the race window is
+		 * narrow, let's leave as-is for now. If this becomes
+		 * pronounced, we can skip over workers which are still on cpu
+		 * when picking an idle worker.
+		 */
+
+		/*
+		 * If @work's workqueue requests localization, @work has CPU
+		 * assigned and there are enough idle workers, pre-assign @work
+		 * to @worker and tell the scheduler to try to wake up @worker
+		 * on @work's issuing CPU. Be careful that ->localize is a
+		 * workqueue attribute, not a pool one.
+		 */
+		if (wq->unbound_attrs && wq->unbound_attrs->localize &&
+		    pwq->cpu >= 0 && pool->nr_idle > 1) {
+			if (assign_work(work, worker, NULL)) {
+				worker_leave_idle(worker);
+				p->wake_cpu = pwq->cpu;
+				wake_up_process(worker->task);
+				woken_up = true;
+				continue;
+			}
+		}
+
+		/*
+		 * If @pool has non-strict affinity, @worker might have ended up
+		 * outside its affinity scope. Repatriate.
+		 */
+		if (!pool->attrs->affn_strict &&
+		    !cpumask_test_cpu(p->wake_cpu, pool->attrs->__pod_cpumask)) {
+			p->wake_cpu = cpumask_any_distribute(
+						pool->attrs->__pod_cpumask);
+			pwq->stats[PWQ_STAT_REPATRIATED]++;
+		}
 #endif
-	wake_up_process(p);
-	return true;
+		wake_up_process(p);
+		return true;
+	}
+
+	return woken_up;
 }
 
 #ifdef CONFIG_WQ_CPU_INTENSIVE_REPORT
@@ -2607,6 +2633,8 @@ __acquires(&pool->lock)
 	 */
 	lockdep_invariant_state(true);
 	pwq->stats[PWQ_STAT_STARTED]++;
+	if (pwq->cpu == smp_processor_id())
+		pwq->stats[PWQ_STAT_CPU_LOCAL]++;
 	trace_workqueue_execute_start(work);
 	worker->current_func(work);
 	/*
@@ -2730,22 +2758,26 @@ woke_up:
 		return 0;
 	}
 
-	worker_leave_idle(worker);
-recheck:
-	/* no more worker necessary? */
-	if (!need_more_worker(pool))
-		goto sleep;
-
-	/* do we need to manage? */
-	if (unlikely(!may_start_working(pool)) && manage_workers(worker))
-		goto recheck;
-
 	/*
-	 * ->scheduled list can only be filled while a worker is
-	 * preparing to process a work or actually processing it.
-	 * Make sure nobody diddled with it while I was sleeping.
+	 * If kick_pool() assigned a work item to us, it made sure that there
+	 * are other idle workers to serve the manager role and moved us out of
+	 * the idle state already. If IDLE is clear, skip manager check and
+	 * start executing the work items on @worker->scheduled right away.
 	 */
-	WARN_ON_ONCE(!list_empty(&worker->scheduled));
+	if (worker->flags & WORKER_IDLE) {
+		WARN_ON_ONCE(!list_empty(&worker->scheduled));
+		worker_leave_idle(worker);
+
+		while (true) {
+			/* no more worker necessary? */
+			if (!need_more_worker(pool))
+				goto sleep;
+			/* do we need to manage? */
+			if (likely(may_start_working(pool)) ||
+			    !manage_workers(worker))
+				break;
+		}
+	}
 
 	/*
 	 * Finish PREP stage.  We're guaranteed to have at least one idle
@@ -2756,14 +2788,31 @@ recheck:
 	 */
 	worker_clr_flags(worker, WORKER_PREP | WORKER_REBOUND);
 
-	do {
-		struct work_struct *work =
-			list_first_entry(&pool->worklist,
-					 struct work_struct, entry);
+	/*
+	 * If we woke up with IDLE cleared, there may already be work items on
+	 * ->scheduled. Always run process_scheduled_works() at least once. Note
+	 * that ->scheduled can be empty even after !IDLE wake-up as the
+	 * scheduled work item could have been canceled in-between.
+	 */
+	process_scheduled_works(worker);
 
-		if (assign_work(work, worker, NULL))
-			process_scheduled_works(worker);
-	} while (keep_working(pool));
+	/*
+	 * For unbound workqueues, the following keep_working() would be true
+	 * only when there are worker shortages. Otherwise, work items would
+	 * have been assigned to workers on queueing.
+	 */
+	while (keep_working(pool)) {
+		struct work_struct *work = list_first_entry(&pool->worklist,
+						struct work_struct, entry);
+		/*
+		 * An unbound @worker here might not be on the same CPU as @work
+		 * which is unfortunate if the workqueue has localization turned
+		 * on. However, it shouldn't be a problem in practice as this
+		 * path isn't taken often for unbound workqueues.
+		 */
+		assign_work(work, worker, NULL);
+		process_scheduled_works(worker);
+	}
 
 	worker_set_flags(worker, WORKER_PREP);
 sleep:
@@ -3737,6 +3786,7 @@ static void copy_workqueue_attrs(struct workqueue_attrs *to,
 	 * get_unbound_pool() explicitly clears the fields.
 	 */
 	to->affn_scope = from->affn_scope;
+	to->localize = from->localize;
 	to->ordered = from->ordered;
 }
 
@@ -4020,6 +4070,7 @@ static struct worker_pool *get_unbound_pool(const struct workqueue_attrs *attrs)
 
 	/* clear wq-only attr fields. See 'struct workqueue_attrs' comments */
 	pool->attrs->affn_scope = WQ_AFFN_NR_TYPES;
+	pool->attrs->localize = false;
 	pool->attrs->ordered = false;
 
 	if (worker_pool_assign_id(pool) < 0)
@@ -5832,6 +5883,7 @@ module_param_cb(default_affinity_scope, &wq_affn_dfl_ops, NULL, 0644);
  *  cpumask		RW mask	: bitmask of allowed CPUs for the workers
  *  affinity_scope	RW str  : worker CPU affinity scope (cache, numa, none)
  *  affinity_strict	RW bool : worker CPU affinity is strict
+ *  localize		RW bool : localize worker to work's origin CPU
  */
 struct wq_device {
 	struct workqueue_struct		*wq;
@@ -6042,11 +6094,34 @@ static ssize_t wq_affinity_strict_store(struct device *dev,
 	return ret ?: count;
 }
 
+static ssize_t wq_localize_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct workqueue_struct *wq = dev_to_wq(dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", wq->unbound_attrs->localize);
+}
+
+static ssize_t wq_localize_store(struct device *dev,
+				 struct device_attribute *attr, const char *buf,
+				 size_t count)
+{
+	struct workqueue_struct *wq = dev_to_wq(dev);
+	int v;
+
+	if (sscanf(buf, "%d", &v) != 1)
+		return -EINVAL;
+
+	wq->unbound_attrs->localize = v;
+	return count;
+}
+
 static struct device_attribute wq_sysfs_unbound_attrs[] = {
 	__ATTR(nice, 0644, wq_nice_show, wq_nice_store),
 	__ATTR(cpumask, 0644, wq_cpumask_show, wq_cpumask_store),
 	__ATTR(affinity_scope, 0644, wq_affn_scope_show, wq_affn_scope_store),
 	__ATTR(affinity_strict, 0644, wq_affinity_strict_show, wq_affinity_strict_store),
+	__ATTR(localize, 0644, wq_localize_show, wq_localize_store),
 	__ATTR_NULL,
 };
 

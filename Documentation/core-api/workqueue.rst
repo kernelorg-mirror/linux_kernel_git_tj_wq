@@ -665,25 +665,25 @@ Monitoring
 Use tools/workqueue/wq_monitor.py to monitor workqueue operations: ::
 
   $ tools/workqueue/wq_monitor.py events
-                              total  infl  CPUtime  CPUhog CMW/RPR  mayday rescued
-  events                      18545     0      6.1       0       5       -       -
-  events_highpri                  8     0      0.0       0       0       -       -
-  events_long                     3     0      0.0       0       0       -       -
-  events_unbound              38306     0      0.1       -       7       -       -
-  events_freezable                0     0      0.0       0       0       -       -
-  events_power_efficient      29598     0      0.2       0       0       -       -
-  events_freezable_power_        10     0      0.0       0       0       -       -
-  sock_diag_events                0     0      0.0       0       0       -       -
+                              total  infl  CPUtime  CPUlocal CPUhog CMW/RPR  mayday rescued
+  events                      18545     0      6.1     18545      0       5       -       -
+  events_highpri                  8     0      0.0         8      0       0       -       -
+  events_long                     3     0      0.0         3      0       0       -       -
+  events_unbound              38306     0      0.1      9432      -       7       -       -
+  events_freezable                0     0      0.0         0      0       0       -       -
+  events_power_efficient      29598     0      0.2     29598      0       0       -       -
+  events_freezable_power_        10     0      0.0        10      0       0       -       -
+  sock_diag_events                0     0      0.0         0      0       0       -       -
 
-                              total  infl  CPUtime  CPUhog CMW/RPR  mayday rescued
-  events                      18548     0      6.1       0       5       -       -
-  events_highpri                  8     0      0.0       0       0       -       -
-  events_long                     3     0      0.0       0       0       -       -
-  events_unbound              38322     0      0.1       -       7       -       -
-  events_freezable                0     0      0.0       0       0       -       -
-  events_power_efficient      29603     0      0.2       0       0       -       -
-  events_freezable_power_        10     0      0.0       0       0       -       -
-  sock_diag_events                0     0      0.0       0       0       -       -
+                              total  infl  CPUtime  CPUlocal CPUhog CMW/RPR  mayday rescued
+  events                      18548     0      6.1     18548      0       5       -       -
+  events_highpri                  8     0      0.0         8      0       0       -       -
+  events_long                     3     0      0.0         3      0       0       -       -
+  events_unbound              38322     0      0.1      9440      -       7       -       -
+  events_freezable                0     0      0.0         0      0       0       -       -
+  events_power_efficient      29603     0      0.2     29063      0       0       -       -
+  events_freezable_power_        10     0      0.0        10      0       0       -       -
+  sock_diag_events                0     0      0.0         0      0       0       -       -
 
   ...
 

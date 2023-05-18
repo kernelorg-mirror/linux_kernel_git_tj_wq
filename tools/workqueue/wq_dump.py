@@ -41,6 +41,7 @@ each workqueue:
   NAME      name of the workqueue
   TYPE      percpu, unbound or ordered
   FLAGS     S: strict affinity scope
+            L: localize worker to work item's issuing CPU
   POOL_ID   worker pool ID associated with each possible CPU
 """
 
@@ -160,8 +161,10 @@ for wq in list_for_each_entry('struct workqueue_struct', workqueues.address_of_(
             print(' ordered   ', end='')
         else:
             print(' unbound', end='')
-            if wq.unbound_attrs.affn_strict:
-                print(',S ', end='')
+            strict = wq.unbound_attrs.affn_strict
+            local = wq.unbound_attrs.localize
+            if strict or local:
+                print(f',{"S" if strict else "_"}{"L" if local else "_"}', end='')
             else:
                 print('   ', end='')
     else:

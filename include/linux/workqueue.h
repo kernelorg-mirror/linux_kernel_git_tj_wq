@@ -198,6 +198,16 @@ struct workqueue_attrs {
 	enum wq_affn_scope affn_scope;
 
 	/**
+	 * @localize: always put worker on work item's issuing CPU
+	 *
+	 * When starting execution of a work item, always move the assigned
+	 * worker to the CPU the work item was issued on. The scheduler is free
+	 * to move the worker around afterwards as allowed by the affinity
+	 * scope.
+	 */
+	bool localize;
+
+	/**
 	 * @ordered: work items must be executed one by one in queueing order
 	 */
 	bool ordered;

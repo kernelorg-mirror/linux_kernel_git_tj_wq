@@ -15,6 +15,9 @@ https://github.com/osandov/drgn.
            sampled from scheduler ticks and only provides ballpark
            measurement. "nohz_full=" CPUs are excluded from measurement.
 
+  CPUlocl  The number of times a work item starts executing on the same CPU
+           that the work item was issued on.
+
   CPUitsv  The number of times a concurrency-managed work item hogged CPU
            longer than the threshold (workqueue.cpu_intensive_thresh_us)
            and got excluded from concurrency management to avoid stalling
@@ -66,6 +69,7 @@ WQ_MEM_RECLAIM          = prog['WQ_MEM_RECLAIM']
 PWQ_STAT_STARTED        = prog['PWQ_STAT_STARTED']      # work items started execution
 PWQ_STAT_COMPLETED      = prog['PWQ_STAT_COMPLETED']	# work items completed execution
 PWQ_STAT_CPU_TIME       = prog['PWQ_STAT_CPU_TIME']     # total CPU time consumed
+PWQ_STAT_CPU_LOCAL      = prog['PWQ_STAT_CPU_LOCAL']    # work items started on the issuing CPU
 PWQ_STAT_CPU_INTENSIVE  = prog['PWQ_STAT_CPU_INTENSIVE'] # wq_cpu_intensive_thresh_us violations
 PWQ_STAT_CM_WAKEUP      = prog['PWQ_STAT_CM_WAKEUP']    # concurrency-management worker wakeups
 PWQ_STAT_REPATRIATED    = prog['PWQ_STAT_REPATRIATED']  # unbound workers brought back into scope
@@ -91,6 +95,7 @@ class WqStats:
                  'started'              : self.stats[PWQ_STAT_STARTED],
                  'completed'            : self.stats[PWQ_STAT_COMPLETED],
                  'cpu_time'             : self.stats[PWQ_STAT_CPU_TIME],
+                 'cpu_local'            : self.stats[PWQ_STAT_CPU_LOCAL],
                  'cpu_intensive'        : self.stats[PWQ_STAT_CPU_INTENSIVE],
                  'cm_wakeup'            : self.stats[PWQ_STAT_CM_WAKEUP],
                  'repatriated'          : self.stats[PWQ_STAT_REPATRIATED],
@@ -98,7 +103,7 @@ class WqStats:
                  'rescued'              : self.stats[PWQ_STAT_RESCUED], }
 
     def table_header_str():
-        return f'{"":>24} {"total":>8} {"infl":>5} {"CPUtime":>8} '\
+        return f'{"":>24} {"total":>8} {"infl":>5} {"CPUtime":>8} {"CPUlocal":>8} '\
             f'{"CPUitsv":>7} {"CMW/RPR":>7} {"mayday":>7} {"rescued":>7}'
 
     def table_row_str(self):
@@ -121,6 +126,7 @@ class WqStats:
               f'{self.stats[PWQ_STAT_STARTED]:8} ' \
               f'{max(self.stats[PWQ_STAT_STARTED] - self.stats[PWQ_STAT_COMPLETED], 0):5} ' \
               f'{self.stats[PWQ_STAT_CPU_TIME] / 1000000:8.1f} ' \
+              f'{self.stats[PWQ_STAT_CPU_LOCAL]:8} ' \
               f'{cpu_intensive:>7} ' \
               f'{cmw_rpr:>7} ' \
               f'{mayday:>7} ' \
