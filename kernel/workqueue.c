@@ -3691,6 +3691,20 @@ static bool wqattrs_equal(const struct workqueue_attrs *a,
 	return true;
 }
 
+/* Update @attrs with actually available CPUs */
+static void wqattrs_actualize_cpumask(struct workqueue_attrs *attrs,
+				      const cpumask_t *unbound_cpumask)
+{
+	/*
+	 * Calculate the effective CPU mask of @attrs given @unbound_cpumask. If
+	 * @attrs->cpumask doesn't overlap with @unbound_cpumask, we fallback to
+	 * @unbound_cpumask.
+	 */
+	cpumask_and(attrs->cpumask, attrs->cpumask, unbound_cpumask);
+	if (unlikely(cpumask_empty(attrs->cpumask)))
+		cpumask_copy(attrs->cpumask, unbound_cpumask);
+}
+
 /**
  * init_worker_pool - initialize a newly zalloc'd worker_pool
  * @pool: worker_pool to initialize
@@ -4216,31 +4230,21 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 		goto out_free;
 
 	/*
-	 * Calculate the attrs of the default pwq with unbound_cpumask
-	 * which is wq_unbound_cpumask or to set to wq_unbound_cpumask.
-	 * If the user configured cpumask doesn't overlap with the
-	 * wq_unbound_cpumask, we fallback to the wq_unbound_cpumask.
-	 */
-	copy_workqueue_attrs(new_attrs, attrs);
-	cpumask_and(new_attrs->cpumask, new_attrs->cpumask, unbound_cpumask);
-	if (unlikely(cpumask_empty(new_attrs->cpumask)))
-		cpumask_copy(new_attrs->cpumask, unbound_cpumask);
-
-	/*
-	 * We may create multiple pwqs with differing cpumasks.  Make a
-	 * copy of @new_attrs which will be modified and used to obtain
-	 * pools.
-	 */
-	copy_workqueue_attrs(tmp_attrs, new_attrs);
-
-	/*
 	 * If something goes wrong during CPU up/down, we'll fall back to
 	 * the default pwq covering whole @attrs->cpumask.  Always create
 	 * it even if we don't use it immediately.
 	 */
+	copy_workqueue_attrs(new_attrs, attrs);
+	wqattrs_actualize_cpumask(new_attrs, unbound_cpumask);
 	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
 	if (!ctx->dfl_pwq)
 		goto out_free;
+
+	/*
+	 * We may create multiple pwqs with differing cpumasks. Make a copy of
+	 * @new_attrs which will be modified and used to obtain pools.
+	 */
+	copy_workqueue_attrs(tmp_attrs, new_attrs);
 
 	for_each_possible_cpu(cpu) {
 		if (new_attrs->ordered) {
@@ -4408,9 +4412,10 @@ static void wq_update_pod(struct workqueue_struct *wq, int cpu, bool online)
 	cpumask = target_attrs->cpumask;
 
 	copy_workqueue_attrs(target_attrs, wq->unbound_attrs);
+	wqattrs_actualize_cpumask(target_attrs, wq_unbound_cpumask);
 
 	/* nothing to do if the target cpumask matches the current pwq */
-	wq_calc_pod_cpumask(wq->dfl_pwq->pool->attrs, pod, cpu_off, cpumask);
+	wq_calc_pod_cpumask(target_attrs, pod, cpu_off, cpumask);
 	pwq = rcu_dereference_protected(*per_cpu_ptr(wq->cpu_pwq, cpu),
 					lockdep_is_held(&wq_pool_mutex));
 	if (cpumask_equal(cpumask, pwq->pool->attrs->cpumask))
