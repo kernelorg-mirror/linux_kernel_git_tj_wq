@@ -7105,6 +7105,13 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	unsigned long task_util, util_min, util_max;
 	int i, recent_used_cpu;
 
+	if (prev >= nr_cpu_ids || target >= nr_cpu_ids) {
+		printk_deferred_once(KERN_WARNING "XXX: new_cpu=%d or target=%d >= nr_cpu_ids=%d",
+				     prev, target, nr_cpu_ids);
+		prev = 0;
+		target = 0;
+	}
+
 	/*
 	 * On asymmetric system, update task utilization because we will check
 	 * that the task fits with cpu's capacity.

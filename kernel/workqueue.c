@@ -1125,7 +1125,10 @@ static bool kick_pool(struct worker_pool *pool)
 	    !cpumask_test_cpu(p->wake_cpu, pool->attrs->__pod_cpumask)) {
 		struct work_struct *work = list_first_entry(&pool->worklist,
 						struct work_struct, entry);
-		p->wake_cpu = cpumask_any_distribute(pool->attrs->__pod_cpumask);
+		int wake_cpu = cpumask_any_distribute(pool->attrs->__pod_cpumask);
+
+		if (!WARN_ON_ONCE(wake_cpu >= nr_cpu_ids))
+			p->wake_cpu = wake_cpu;
 		get_work_pwq(work)->stats[PWQ_STAT_REPATRIATED]++;
 	}
 #endif
@@ -4239,6 +4242,8 @@ static void wq_calc_pod_cpumask(struct workqueue_attrs *attrs, int cpu,
 	const struct wq_pod_type *pt = wqattrs_pod_type(attrs);
 	int pod = pt->cpu_pod[cpu];
 
+	WARN_ON_ONCE(cpumask_empty(attrs->cpumask));
+
 	/* does @pod have any online CPUs @attrs wants? */
 	cpumask_and(attrs->__pod_cpumask, pt->pod_cpus[pod], attrs->cpumask);
 	cpumask_and(attrs->__pod_cpumask, attrs->__pod_cpumask, cpu_online_mask);
@@ -4253,9 +4258,9 @@ static void wq_calc_pod_cpumask(struct workqueue_attrs *attrs, int cpu,
 	/* yeap, return possible CPUs in @pod that @attrs wants */
 	cpumask_and(attrs->__pod_cpumask, attrs->cpumask, pt->pod_cpus[pod]);
 
-	if (cpumask_empty(attrs->__pod_cpumask))
-		pr_warn_once("WARNING: workqueue cpumask: online intersect > "
-				"possible intersect\n");
+	if (WARN_ONCE(cpumask_empty(attrs->__pod_cpumask),
+		      "workqueue cpumask: online intersect > possible intersect\n"))
+		cpumask_copy(attrs->__pod_cpumask, attrs->cpumask);
 }
 
 /* install @pwq into @wq's cpu_pwq and return the old pwq */
