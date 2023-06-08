@@ -256,12 +256,12 @@ struct pool_workqueue {
 	u64			stats[PWQ_NR_STATS];
 
 	/*
-	 * Release of unbound pwq is punted to system_wq.  See put_pwq()
-	 * and pwq_unbound_release_workfn() for details.  pool_workqueue
-	 * itself is also RCU protected so that the first pwq can be
-	 * determined without grabbing wq->mutex.
+	 * Release of unbound pwq is punted to a kthread_worker. See put_pwq()
+	 * and pwq_unbound_release_workfn() for details. pool_workqueue itself
+	 * is also RCU protected so that the first pwq can be determined without
+	 * grabbing wq->mutex.
 	 */
-	struct work_struct	unbound_release_work;
+	struct kthread_work	unbound_release_work;
 	struct rcu_head		rcu;
 } __aligned(1 << WORK_STRUCT_FLAG_BITS);
 
@@ -388,6 +388,13 @@ static struct workqueue_attrs *unbound_std_wq_attrs[NR_STD_WORKER_POOLS];
 
 /* I: attributes used when instantiating ordered pools on demand */
 static struct workqueue_attrs *ordered_wq_attrs[NR_STD_WORKER_POOLS];
+
+/*
+ * I: kthread_worker to release pwq's. pwq release needs to be bounced to a
+ * process context while holding a pool lock. Bounce to a dedicated kthread
+ * worker to avoid A-A deadlocks.
+ */
+static struct kthread_worker *pwq_release_worker;
 
 struct workqueue_struct *system_wq __read_mostly;
 EXPORT_SYMBOL(system_wq);
@@ -1357,14 +1364,10 @@ static void put_pwq(struct pool_workqueue *pwq)
 	if (WARN_ON_ONCE(!(pwq->wq->flags & WQ_UNBOUND)))
 		return;
 	/*
-	 * @pwq can't be released under pool->lock, bounce to
-	 * pwq_unbound_release_workfn().  This never recurses on the same
-	 * pool->lock as this path is taken only for unbound workqueues and
-	 * the release work item is scheduled on a per-cpu workqueue.  To
-	 * avoid lockdep warning, unbound pool->locks are given lockdep
-	 * subclass of 1 in get_unbound_pool().
+	 * @pwq can't be released under pool->lock, bounce to a dedicated
+	 * kthread_worker to avoid A-A deadlocks.
 	 */
-	schedule_work(&pwq->unbound_release_work);
+	kthread_queue_work(pwq_release_worker, &pwq->unbound_release_work);
 }
 
 /**
@@ -3959,7 +3962,6 @@ static struct worker_pool *get_unbound_pool(const struct workqueue_attrs *attrs)
 	if (!pool || init_worker_pool(pool) < 0)
 		goto fail;
 
-	lockdep_set_subclass(&pool->lock, 1);	/* see put_pwq() */
 	copy_workqueue_attrs(pool->attrs, attrs);
 	pool->node = target_node;
 
@@ -3993,10 +3995,10 @@ static void rcu_free_pwq(struct rcu_head *rcu)
 }
 
 /*
- * Scheduled on system_wq by put_pwq() when an unbound pwq hits zero refcnt
- * and needs to be destroyed.
+ * Scheduled on pwq_release_worker by put_pwq() when an unbound pwq hits zero
+ * refcnt and needs to be destroyed.
  */
-static void pwq_unbound_release_workfn(struct work_struct *work)
+static void pwq_unbound_release_workfn(struct kthread_work *work)
 {
 	struct pool_workqueue *pwq = container_of(work, struct pool_workqueue,
 						  unbound_release_work);
@@ -4104,7 +4106,8 @@ static void init_pwq(struct pool_workqueue *pwq, struct workqueue_struct *wq,
 	INIT_LIST_HEAD(&pwq->inactive_works);
 	INIT_LIST_HEAD(&pwq->pwqs_node);
 	INIT_LIST_HEAD(&pwq->mayday_node);
-	INIT_WORK(&pwq->unbound_release_work, pwq_unbound_release_workfn);
+	kthread_init_work(&pwq->unbound_release_work,
+			  pwq_unbound_release_workfn);
 }
 
 /* sync @pwq with the current state of its associated wq and link it */
@@ -6429,6 +6432,9 @@ void __init workqueue_init(void)
 	struct workqueue_struct *wq;
 	struct worker_pool *pool;
 	int cpu, bkt;
+
+	pwq_release_worker = kthread_create_worker(0, "pool_workqueue_release");
+	BUG_ON(IS_ERR(pwq_release_worker));
 
 	/*
 	 * It'd be simpler to initialize NUMA in workqueue_init_early() but
