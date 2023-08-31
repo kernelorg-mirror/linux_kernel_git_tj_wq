@@ -24,7 +24,6 @@
 #include <linux/device.h>
 #include <linux/delay.h>
 
-#include <linux/fs_enet_pd.h>
 #include <linux/fs_uart_pd.h>
 #include <linux/fsl_devices.h>
 #include <linux/mii.h>
@@ -39,7 +38,6 @@
 #include <asm/time.h>
 #include <asm/8xx_immap.h>
 #include <asm/cpm1.h>
-#include <asm/fs_pd.h>
 #include <asm/udbg.h>
 
 #include "mpc8xx.h"
