@@ -441,9 +441,6 @@ static DEFINE_HASHTABLE(unbound_pool_hash, UNBOUND_POOL_HASH_ORDER);
 /* I: attributes used when instantiating standard unbound pools on demand */
 static struct workqueue_attrs *unbound_std_wq_attrs[NR_STD_WORKER_POOLS];
 
-/* I: attributes used when instantiating ordered pools on demand */
-static struct workqueue_attrs *ordered_wq_attrs[NR_STD_WORKER_POOLS];
-
 /*
  * I: kthread_worker to release pwq's. pwq release needs to be bounced to a
  * process context while holding a pool lock. Bounce to a dedicated kthread
@@ -1435,6 +1432,9 @@ work_func_t wq_worker_last_func(struct task_struct *task)
  *
  * - %NULL for per-cpu workqueues as they don't need to use shared nr_active.
  *
+ * - node_nr_active[nr_node_ids] if the associated workqueue is ordered so that
+ *   all pwq's are limited by the same nr_active.
+ *
  * - node_nr_active[nr_node_ids] if @node is %NUMA_NO_NODE.
  *
  * - Otherwise, node_nr_active[@node].
@@ -1445,7 +1445,7 @@ static struct wq_node_nr_active *wq_node_nr_active(struct workqueue_struct *wq,
 	if (!(wq->flags & WQ_UNBOUND))
 		return NULL;
 
-	if (node == NUMA_NO_NODE)
+	if ((wq->flags & __WQ_ORDERED) || node == NUMA_NO_NODE)
 		node = nr_node_ids;
 
 	return wq->node_nr_active[node];
@@ -4312,7 +4312,7 @@ static struct wq_node_nr_active **alloc_node_nr_active(void)
 		nna_ar[node] = nna;
 	}
 
-	/* [nr_node_ids] is used as the fallback */
+	/* [nr_node_ids] is used for ordered workqueues and as the fallback */
 	nna = kzalloc_node(sizeof(*nna), GFP_KERNEL, NUMA_NO_NODE);
 	if (!nna)
 		goto err_free;
@@ -4799,14 +4799,6 @@ static int apply_workqueue_attrs_locked(struct workqueue_struct *wq,
 	if (WARN_ON(!(wq->flags & WQ_UNBOUND)))
 		return -EINVAL;
 
-	/* creating multiple pwqs breaks ordering guarantee */
-	if (!list_empty(&wq->pwqs)) {
-		if (WARN_ON(wq->flags & __WQ_ORDERED_EXPLICIT))
-			return -EINVAL;
-
-		wq->flags &= ~__WQ_ORDERED;
-	}
-
 	ctx = apply_wqattrs_prepare(wq, attrs, wq_unbound_cpumask);
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
@@ -4955,15 +4947,7 @@ static int alloc_and_link_pwqs(struct workqueue_struct *wq)
 	}
 
 	cpus_read_lock();
-	if (wq->flags & __WQ_ORDERED) {
-		ret = apply_workqueue_attrs(wq, ordered_wq_attrs[highpri]);
-		/* there should only be single pwq for ordering guarantee */
-		WARN(!ret && (wq->pwqs.next != &wq->dfl_pwq->pwqs_node ||
-			      wq->pwqs.prev != &wq->dfl_pwq->pwqs_node),
-		     "ordering guarantee broken for workqueue %s\n", wq->name);
-	} else {
-		ret = apply_workqueue_attrs(wq, unbound_std_wq_attrs[highpri]);
-	}
+	ret = apply_workqueue_attrs(wq, unbound_std_wq_attrs[highpri]);
 	cpus_read_unlock();
 
 	/* for unbound pwq, flush the pwq_release_worker ensures that the
@@ -6220,13 +6204,6 @@ static int workqueue_apply_unbound_cpumask(const cpumask_var_t unbound_cpumask)
 		if (!(wq->flags & WQ_UNBOUND))
 			continue;
 
-		/* creating multiple pwqs breaks ordering guarantee */
-		if (!list_empty(&wq->pwqs)) {
-			if (wq->flags & __WQ_ORDERED_EXPLICIT)
-				continue;
-			wq->flags &= ~__WQ_ORDERED;
-		}
-
 		ctx = apply_wqattrs_prepare(wq, wq->unbound_attrs, unbound_cpumask);
 		if (IS_ERR(ctx)) {
 			ret = PTR_ERR(ctx);
@@ -7023,15 +7000,6 @@ void __init workqueue_init_early(void)
 		BUG_ON(!(attrs = alloc_workqueue_attrs()));
 		attrs->nice = std_nice[i];
 		unbound_std_wq_attrs[i] = attrs;
-
-		/*
-		 * An ordered wq should have only one pwq as ordering is
-		 * guaranteed by max_active which is enforced by pwqs.
-		 */
-		BUG_ON(!(attrs = alloc_workqueue_attrs()));
-		attrs->nice = std_nice[i];
-		attrs->ordered = true;
-		ordered_wq_attrs[i] = attrs;
 	}
 
 	system_wq = alloc_workqueue("events", 0, 0);
