@@ -53,6 +53,7 @@
 #include <linux/nmi.h>
 #include <linux/kvm_para.h>
 #include <linux/delay.h>
+#include <linux/topology.h>
 
 #include "workqueue_internal.h"
 
@@ -341,6 +342,8 @@ struct wq_pod_type {
 	int			*cpu_pod;	/* cpu -> pod */
 };
 
+static int first_possible_node __read_mostly;
+static int node_nr_cpus[MAX_NUMNODES] __read_mostly;
 static struct wq_pod_type wq_pod_types[WQ_AFFN_NR_TYPES];
 static enum wq_affn_scope wq_affn_dfl = WQ_AFFN_CACHE;
 
@@ -5617,6 +5620,8 @@ int workqueue_online_cpu(unsigned int cpu)
 	struct workqueue_struct *wq;
 	int pi;
 
+	node_nr_cpus[cpu_to_node(cpu)]++;
+
 	mutex_lock(&wq_pool_mutex);
 
 	for_each_pool(pool, pi) {
@@ -5671,6 +5676,8 @@ int workqueue_offline_cpu(unsigned int cpu)
 		}
 	}
 	mutex_unlock(&wq_pool_mutex);
+
+	node_nr_cpus[cpu_to_node(cpu)]--;
 
 	return 0;
 }
@@ -6686,6 +6693,9 @@ void __init workqueue_init_early(void)
 	int i, cpu;
 
 	BUILD_BUG_ON(__alignof__(struct pool_workqueue) < __alignof__(long long));
+
+	first_possible_node = first_node(node_states[N_POSSIBLE]);
+	node_nr_cpus[cpu_to_node(0)]++;
 
 	BUG_ON(!alloc_cpumask_var(&wq_unbound_cpumask, GFP_KERNEL));
 	BUG_ON(!alloc_cpumask_var(&wq_requested_unbound_cpumask, GFP_KERNEL));
