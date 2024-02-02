@@ -645,9 +645,9 @@ static void verity_work(struct work_struct *w)
 	verity_finish_io(io, errno_to_blk_status(verity_verify_io(io)));
 }
 
-static void verity_tasklet(unsigned long data)
+static void verity_bh_work(struct work_struct *w)
 {
-	struct dm_verity_io *io = (struct dm_verity_io *)data;
+	struct dm_verity_io *io = container_of(w, struct dm_verity_io, bh_work);
 	int err;
 
 	io->in_tasklet = true;
@@ -675,8 +675,8 @@ static void verity_end_io(struct bio *bio)
 	}
 
 	if (static_branch_unlikely(&use_tasklet_enabled) && io->v->use_tasklet) {
-		tasklet_init(&io->tasklet, verity_tasklet, (unsigned long)io);
-		tasklet_schedule(&io->tasklet);
+		INIT_WORK(&io->bh_work, verity_bh_work);
+		queue_work(system_bh_wq, &io->bh_work);
 	} else {
 		INIT_WORK(&io->work, verity_work);
 		queue_work(io->v->verify_wq, &io->work);
