@@ -4004,8 +4004,9 @@ reflush:
 }
 EXPORT_SYMBOL_GPL(drain_workqueue);
 
-static bool start_flush_work(struct work_struct *work, struct wq_barrier *barr,
-			     bool from_cancel)
+static struct worker_pool *start_flush_work(struct work_struct *work,
+					    struct wq_barrier *barr,
+					    bool from_cancel)
 {
 	struct worker *worker = NULL;
 	struct worker_pool *pool;
@@ -4014,12 +4015,9 @@ static bool start_flush_work(struct work_struct *work, struct wq_barrier *barr,
 
 	might_sleep();
 
-	rcu_read_lock();
 	pool = get_work_pool(work);
-	if (!pool) {
-		rcu_read_unlock();
-		return false;
-	}
+	if (!pool)
+		return NULL;
 
 	raw_spin_lock_irq(&pool->lock);
 	/* see the comment in try_to_grab_pending() with the same code */
@@ -4027,6 +4025,12 @@ static bool start_flush_work(struct work_struct *work, struct wq_barrier *barr,
 	if (pwq) {
 		if (unlikely(pwq->pool != pool))
 			goto already_gone;
+		/*
+		 * Cancel path should already have removed @work from worklist
+		 * in try_to_grab_pending(). Control should get here iff we need
+		 * to wait for the current execution to finish.
+		 */
+		WARN_ON_ONCE(from_cancel);
 	} else {
 		worker = find_worker_executing_work(pool, work);
 		if (!worker)
@@ -4054,17 +4058,16 @@ static bool start_flush_work(struct work_struct *work, struct wq_barrier *barr,
 	if (!from_cancel && (wq->saved_max_active == 1 || wq->rescuer))
 		touch_wq_lockdep_map(wq);
 
-	rcu_read_unlock();
-	return true;
+	return pool;
 already_gone:
 	raw_spin_unlock_irq(&pool->lock);
-	rcu_read_unlock();
-	return false;
+	return NULL;
 }
 
 static bool __flush_work(struct work_struct *work, bool from_cancel)
 {
 	struct wq_barrier barr;
+	struct worker_pool *pool;
 
 	if (WARN_ON(!wq_online))
 		return false;
@@ -4072,13 +4075,15 @@ static bool __flush_work(struct work_struct *work, bool from_cancel)
 	if (WARN_ON(!work->func))
 		return false;
 
-	if (start_flush_work(work, &barr, from_cancel)) {
-		wait_for_completion(&barr.done);
-		destroy_work_on_stack(&barr.work);
-		return true;
-	} else {
+	rcu_read_lock();
+	pool = start_flush_work(work, &barr, from_cancel);
+	rcu_read_unlock();
+	if (!pool)
 		return false;
-	}
+
+	wait_for_completion(&barr.done);
+	destroy_work_on_stack(&barr.work);
+	return true;
 }
 
 /**
