@@ -6909,18 +6909,16 @@ static int wq_affn_dfl_set(const char *val, const struct kernel_param *kp)
 	if (affn == WQ_AFFN_DFL)
 		return -EINVAL;
 
-	cpus_read_lock();
 	mutex_lock(&wq_pool_mutex);
 
 	wq_affn_dfl = affn;
 
 	list_for_each_entry(wq, &workqueues, list) {
-		for_each_online_cpu(cpu)
+		for_each_cpu(cpu, wq_online_cpumask)
 			unbound_wq_update_pwq(wq, cpu);
 	}
 
 	mutex_unlock(&wq_pool_mutex);
-	cpus_read_unlock();
 
 	return 0;
 }
