@@ -1566,13 +1566,12 @@ static struct wq_node_nr_active *wq_node_nr_active(struct workqueue_struct *wq,
 /**
  * wq_update_node_max_active - Update per-node max_actives to use
  * @wq: workqueue to update
- * @off_cpu: CPU that's going down, -1 if a CPU is not going down
  *
  * Update @wq->node_nr_active[]->max. @wq must be unbound. max_active is
  * distributed among nodes according to the proportions of numbers of online
  * cpus. The result is always between @wq->min_active and max_active.
  */
-static void wq_update_node_max_active(struct workqueue_struct *wq, int off_cpu)
+static void wq_update_node_max_active(struct workqueue_struct *wq)
 {
 	struct cpumask *effective = unbound_effective_cpumask(wq);
 	int min_active = READ_ONCE(wq->min_active);
@@ -1584,12 +1583,7 @@ static void wq_update_node_max_active(struct workqueue_struct *wq, int off_cpu)
 	if (!wq_topo_initialized)
 		return;
 
-	if (off_cpu >= 0 && !cpumask_test_cpu(off_cpu, effective))
-		off_cpu = -1;
-
-	total_cpus = cpumask_weight_and(effective, cpu_online_mask);
-	if (off_cpu >= 0)
-		total_cpus--;
+	total_cpus = cpumask_weight_and(effective, wq_online_cpumask);
 
 	/* If all CPUs of the wq get offline, use the default values */
 	if (unlikely(!total_cpus)) {
@@ -1601,11 +1595,12 @@ static void wq_update_node_max_active(struct workqueue_struct *wq, int off_cpu)
 	}
 
 	for_each_node(node) {
-		int node_cpus;
+		int cpu, node_cpus = 0;
 
-		node_cpus = cpumask_weight_and(effective, cpumask_of_node(node));
-		if (off_cpu >= 0 && cpu_to_node(off_cpu) == node)
-			node_cpus--;
+		/* count the number of effective online CPUs in the node */
+		for_each_cpu_and(cpu, effective, cpumask_of_node(node))
+			if (cpumask_test_cpu(cpu, wq_online_cpumask))
+				node_cpus++;
 
 		wq_node_nr_active(wq, node)->max =
 			clamp(DIV_ROUND_UP(max_active * node_cpus, total_cpus),
@@ -5298,7 +5293,7 @@ static void apply_wqattrs_commit(struct apply_wqattrs_ctx *ctx)
 	ctx->dfl_pwq = install_unbound_pwq(ctx->wq, -1, ctx->dfl_pwq);
 
 	/* update node_nr_active->max */
-	wq_update_node_max_active(ctx->wq, -1);
+	wq_update_node_max_active(ctx->wq);
 
 	/* rescuer needs to respect wq cpumask changes */
 	if (ctx->wq->rescuer)
@@ -5583,7 +5578,7 @@ static void wq_adjust_max_active(struct workqueue_struct *wq)
 	WRITE_ONCE(wq->min_active, new_min);
 
 	if (wq->flags & WQ_UNBOUND)
-		wq_update_node_max_active(wq, -1);
+		wq_update_node_max_active(wq);
 
 	if (new_max == 0)
 		return;
@@ -6597,7 +6592,7 @@ int workqueue_online_cpu(unsigned int cpu)
 				unbound_wq_update_pwq(wq, tcpu);
 
 			mutex_lock(&wq->mutex);
-			wq_update_node_max_active(wq, -1);
+			wq_update_node_max_active(wq);
 			mutex_unlock(&wq->mutex);
 		}
 	}
@@ -6632,7 +6627,7 @@ int workqueue_offline_cpu(unsigned int cpu)
 				unbound_wq_update_pwq(wq, tcpu);
 
 			mutex_lock(&wq->mutex);
-			wq_update_node_max_active(wq, cpu);
+			wq_update_node_max_active(wq);
 			mutex_unlock(&wq->mutex);
 		}
 	}
@@ -7935,7 +7930,7 @@ void __init workqueue_init_topology(void)
 			unbound_wq_update_pwq(wq, cpu);
 		if (wq->flags & WQ_UNBOUND) {
 			mutex_lock(&wq->mutex);
-			wq_update_node_max_active(wq, -1);
+			wq_update_node_max_active(wq);
 			mutex_unlock(&wq->mutex);
 		}
 	}
