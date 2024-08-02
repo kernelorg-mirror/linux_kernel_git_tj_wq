@@ -6544,6 +6544,39 @@ static void restore_unbound_workers_cpumask(struct worker_pool *pool, int cpu)
 		WARN_ON_ONCE(set_cpus_allowed_ptr(worker->task, &cpumask) < 0);
 }
 
+static void hotplug_update_unbound_pwqs_workfn(struct work_struct *work)
+{
+	struct workqueue_struct *wq;
+
+	mutex_lock(&wq_pool_mutex);
+
+	/*
+	 * CPUs have gone online or offline. Update the pod affinities of all
+	 * unbound workqueues. While not optimal, workqueues operate correctly
+	 * without these updates, so this can be done asynchronously, which
+	 * avoids adding fork dependency from CPU hotplug path.
+	 */
+	list_for_each_entry(wq, &workqueues, list) {
+		struct workqueue_attrs *attrs = wq->unbound_attrs;
+
+		if (attrs) {
+			int cpu;
+
+			for_each_possible_cpu(cpu)
+				update_unbound_pwqs(wq, cpu);
+
+			mutex_lock(&wq->mutex);
+			wq_update_node_max_active(wq);
+			mutex_unlock(&wq->mutex);
+		}
+	}
+
+	mutex_unlock(&wq_pool_mutex);
+}
+
+static DECLARE_WORK(hotplug_update_unbound_pwqs_work,
+		    hotplug_update_unbound_pwqs_workfn);
+
 int workqueue_prepare_cpu(unsigned int cpu)
 {
 	struct worker_pool *pool;
@@ -6560,7 +6593,6 @@ int workqueue_prepare_cpu(unsigned int cpu)
 int workqueue_online_cpu(unsigned int cpu)
 {
 	struct worker_pool *pool;
-	struct workqueue_struct *wq;
 	int pi;
 
 	mutex_lock(&wq_pool_mutex);
@@ -6580,22 +6612,7 @@ int workqueue_online_cpu(unsigned int cpu)
 		mutex_unlock(&wq_pool_attach_mutex);
 	}
 
-	/* update pod affinity of unbound workqueues */
-	list_for_each_entry(wq, &workqueues, list) {
-		struct workqueue_attrs *attrs = wq->unbound_attrs;
-
-		if (attrs) {
-			const struct wq_pod_type *pt = wqattrs_pod_type(attrs);
-			int tcpu;
-
-			for_each_cpu(tcpu, pt->pod_cpus[pt->cpu_pod[cpu]])
-				update_unbound_pwqs(wq, tcpu);
-
-			mutex_lock(&wq->mutex);
-			wq_update_node_max_active(wq);
-			mutex_unlock(&wq->mutex);
-		}
-	}
+	schedule_work(&hotplug_update_unbound_pwqs_work);
 
 	mutex_unlock(&wq_pool_mutex);
 	return 0;
@@ -6603,34 +6620,15 @@ int workqueue_online_cpu(unsigned int cpu)
 
 int workqueue_offline_cpu(unsigned int cpu)
 {
-	struct workqueue_struct *wq;
-
 	/* unbinding per-cpu workers should happen on the local CPU */
 	if (WARN_ON(cpu != smp_processor_id()))
 		return -1;
 
 	unbind_workers(cpu);
 
-	/* update pod affinity of unbound workqueues */
 	mutex_lock(&wq_pool_mutex);
-
 	cpumask_clear_cpu(cpu, wq_online_cpumask);
-
-	list_for_each_entry(wq, &workqueues, list) {
-		struct workqueue_attrs *attrs = wq->unbound_attrs;
-
-		if (attrs) {
-			const struct wq_pod_type *pt = wqattrs_pod_type(attrs);
-			int tcpu;
-
-			for_each_cpu(tcpu, pt->pod_cpus[pt->cpu_pod[cpu]])
-				update_unbound_pwqs(wq, tcpu);
-
-			mutex_lock(&wq->mutex);
-			wq_update_node_max_active(wq);
-			mutex_unlock(&wq->mutex);
-		}
-	}
+	schedule_work(&hotplug_update_unbound_pwqs_work);
 	mutex_unlock(&wq_pool_mutex);
 
 	return 0;
